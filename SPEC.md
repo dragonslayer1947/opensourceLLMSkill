@@ -5,6 +5,13 @@
 
 Working name: `devagent`. Target: production super-apps at Amazon/Flipkart scale.
 
+> **V1 status: BUILT.** The kernel is implemented, installed, and tested (37 offline tests,
+> ruff-clean, CI matrix). Frontier work runs through the `claude` CLI subscription (no API
+> billing). Verified end-to-end: decompose → execute → gate → apply → ledger, with cost-savings
+> and quality (audit/calibrate) reporting. Remaining before "production": run the executor
+> against a live local llama.cpp server and run the 20-task acceptance benchmark. See the build
+> order below; everything through Phase 5 exists.
+
 ---
 
 ## Mental model shift
