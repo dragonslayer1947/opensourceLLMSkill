@@ -24,6 +24,7 @@ from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .models.registry import Registry
 from .models.router import Router
+from .prove.audit import differential_audit, persist as persist_audit
 from .validate.gate import run_gate
 
 
@@ -143,7 +144,8 @@ def _run_subtask(
 
 
 def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Console,
-        files: list[str] | None = None, role_overrides: dict[str, str] | None = None) -> RunResult:
+        files: list[str] | None = None, role_overrides: dict[str, str] | None = None,
+        audit: bool = False) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
@@ -207,6 +209,19 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
 
     _record(config, task, result)
     _save_session(task_root, result, task)
+
+    if audit and result.status == "applied":
+        console.print("\n[bold]Quality audit[/bold] (local vs frontier)…")
+        try:
+            ar = differential_audit(task, path, config, registry, router)
+            persist_audit(config.db_path, ar, run_kind="audit", run_id=result.session_id)
+            if ar.verdict == "skipped":
+                console.print(f"  [yellow]skipped[/yellow]: {ar.reason}")
+            else:
+                console.print(f"  verdict: [bold]{ar.verdict}[/bold] [dim]({ar.reason[:120]})[/dim]")
+        except Exception as e:  # noqa: BLE001 — audit is best-effort, never fails the run
+            console.print(f"  [yellow]audit failed[/yellow]: {e}")
+
     return result
 
 

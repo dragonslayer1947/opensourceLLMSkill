@@ -59,6 +59,7 @@ def run(
     planner: str = typer.Option(None, "--planner", help="Override the planner model for this run."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show intended edits, write nothing."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the keep/rollback confirm."),
+    audit: bool = typer.Option(False, "--audit", help="After applying, measure parity vs the frontier model (uses the frontier model)."),
 ):
     """Decompose a task into in-envelope subtasks, execute locally, gate, and apply."""
     overrides: dict[str, str] = {}
@@ -68,7 +69,7 @@ def run(
         overrides["planner"] = planner
     try:
         result = pipeline.run(task, path, dry_run=dry_run, assume_yes=yes, console=console,
-                              files=list(file or []), role_overrides=overrides)
+                              files=list(file or []), role_overrides=overrides, audit=audit)
     except RoutingError as e:
         console.print(f"\n[red]model error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")
