@@ -64,8 +64,8 @@ def show_cost(config: Config, console: Console) -> None:
     table.add_row("If all-frontier (est.)", f"${counter:.4f}")
     table.add_row("[green]Saved[/green]", f"[green]${savings:.4f}  ({pct:.1f}%)[/green]")
     console.print(table)
-    console.print("[dim]Counterfactual is an estimate: same pipeline with the frontier model "
-                  "as executor. Adjust prices in [pricing] in your config.[/dim]")
+    console.print(r"[dim]Counterfactual is an estimate: same pipeline with the frontier model "
+                  r"as executor. Adjust prices in \[pricing] in your config.[/dim]")
 
 
 def show_quality(config: Config, console: Console) -> None:
