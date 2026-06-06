@@ -84,6 +84,7 @@ def _save_session(root: Path, result: RunResult, task: str) -> None:
 def _run_subtask(
     subtask: Subtask, task_root: Path, config: Config, router: Router,
     index, console: Console, result: RunResult, dry_run: bool,
+    files: set[str] | None = None,
 ) -> SubtaskOutcome:
     env = config.envelope
     bundle = retrieve(
@@ -91,7 +92,7 @@ def _run_subtask(
         max_context_tokens=int(env.get("max_context_tokens", 12000)),
         max_file_lines=int(env.get("max_file_lines", 400)),
         max_files=int(env.get("max_subtask_files", 3)) + 1,
-        explicit_paths=set(subtask.target_files),
+        explicit_paths=set(subtask.target_files) | (files or set()),
     )
     if not bundle.in_envelope:
         result.in_envelope = False
@@ -141,9 +142,13 @@ def _run_subtask(
     return SubtaskOutcome(subtask.id, subtask.description, changed, gate.to_dict(), escalated, status)
 
 
-def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Console) -> RunResult:
+def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Console,
+        files: list[str] | None = None, role_overrides: dict[str, str] | None = None) -> RunResult:
     config = load_config()
+    for role, model in (role_overrides or {}).items():
+        config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
     task_root = Path(path).resolve()
+    file_set = set(files or [])
     registry = Registry(config)
     router = Router(registry)
 
@@ -158,6 +163,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         index, task,
         max_context_tokens=int(config.envelope.get("max_context_tokens", 12000)),
         max_file_lines=int(config.envelope.get("max_file_lines", 400)),
+        explicit_paths=file_set,
     )
     if not bundle.views:
         console.print("[yellow]no existing files matched the task[/yellow] — new files will be "
@@ -179,7 +185,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
 
     for st in plan.subtasks:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
-        outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run)
+        outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run, file_set)
         result.outcomes.append(outcome)
         _save_session(task_root, result, task)
 

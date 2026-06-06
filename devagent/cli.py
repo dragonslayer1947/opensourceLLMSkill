@@ -34,16 +34,41 @@ app = typer.Typer(
 console = Console()
 
 
+def _version_callback(value: bool):
+    if value:
+        from . import __version__
+        console.print(f"devagent {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(
+        None, "--version", "-V", callback=_version_callback, is_eager=True,
+        help="Show version and exit."),
+):
+    """devagent — see `devagent <command> --help` for details."""
+
+
 @app.command()
 def run(
     task: str = typer.Argument(..., help="What to do, in natural language."),
     path: str = typer.Option(".", "--path", "-p", help="Repo to work in."),
+    file: list[str] = typer.Option(None, "--file", "-f", help="Target existing file(s) explicitly (repeatable)."),
+    executor: str = typer.Option(None, "--executor", help="Override the executor model for this run."),
+    planner: str = typer.Option(None, "--planner", help="Override the planner model for this run."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show intended edits, write nothing."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the keep/rollback confirm."),
 ):
     """Decompose a task into in-envelope subtasks, execute locally, gate, and apply."""
+    overrides: dict[str, str] = {}
+    if executor:
+        overrides["executor"] = executor
+    if planner:
+        overrides["planner"] = planner
     try:
-        result = pipeline.run(task, path, dry_run=dry_run, assume_yes=yes, console=console)
+        result = pipeline.run(task, path, dry_run=dry_run, assume_yes=yes, console=console,
+                              files=list(file or []), role_overrides=overrides)
     except pipeline.RoutingError as e:
         console.print(f"\n[red]model error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")
