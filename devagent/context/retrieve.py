@@ -55,6 +55,10 @@ def _score_file(entry, terms: set[str], explicit_paths: set[str]) -> float:
                 score += 5.0
             elif t in name_l:
                 score += 1.5
+    # content-term overlap: matches tasks that reference code in file bodies, not just names
+    body = getattr(entry, "terms", set())
+    if body:
+        score += 2.0 * len(terms & body)
     return score
 
 

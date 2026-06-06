@@ -6,8 +6,24 @@ V1 indexes Python. Other languages fall back to filename/keyword matching."""
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
+
+_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_MAX_TERMS_PER_FILE = 400  # cap memory: keep retrieval cheap even on huge repos
+
+
+def _content_terms(text: str) -> set[str]:
+    """A bounded set of lowercased identifiers/words in a file, for content-based retrieval.
+    Bounded so the index stays small regardless of repo size."""
+    terms: set[str] = set()
+    for w in _WORD.findall(text):
+        if len(w) > 2:
+            terms.add(w.lower())
+            if len(terms) >= _MAX_TERMS_PER_FILE:
+                break
+    return terms
 
 SKIP_DIRS = {".git", ".devagent", "__pycache__", ".venv", "venv", "node_modules",
              ".mypy_cache", ".ruff_cache", ".pytest_cache", "dist", "build", ".idea"}
@@ -29,6 +45,7 @@ class FileEntry:
     lines: int
     symbols: list[Symbol] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)
+    terms: set[str] = field(default_factory=set)  # bounded content terms for retrieval
 
 
 @dataclass
@@ -52,7 +69,7 @@ def _signature(node: ast.AST) -> str:
 
 
 def _parse_python(path: Path, rel: str, text: str) -> FileEntry:
-    entry = FileEntry(path=path, rel=rel, lines=text.count("\n") + 1)
+    entry = FileEntry(path=path, rel=rel, lines=text.count("\n") + 1, terms=_content_terms(text))
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -99,10 +116,11 @@ def build_index(root: str | Path) -> RepoIndex:
                 continue
             index.files.append(_parse_python(path, rel, text))
         elif path.suffix in {".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb", ".rs"}:
-            # Non-Python: name-only entry (V1 windowing/retrieval still works by filename).
+            # Non-Python: no ast symbols, but content terms still enable retrieval.
             try:
-                lines = path.read_text(encoding="utf-8", errors="replace").count("\n") + 1
+                text = path.read_text(encoding="utf-8", errors="replace")
             except OSError:
-                lines = 0
-            index.files.append(FileEntry(path=path, rel=rel, lines=lines))
+                continue
+            index.files.append(FileEntry(
+                path=path, rel=rel, lines=text.count("\n") + 1, terms=_content_terms(text)))
     return index

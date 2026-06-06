@@ -159,6 +159,9 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         max_context_tokens=int(config.envelope.get("max_context_tokens", 12000)),
         max_file_lines=int(config.envelope.get("max_file_lines", 400)),
     )
+    if not bundle.views:
+        console.print("[yellow]no existing files matched the task[/yellow] — new files will be "
+                      "created. Pass --file <path> to target existing code explicitly.")
     console.print(f"[bold]Decomposing[/bold] (retrieved ~{bundle.est_tokens} ctx tokens, "
                   f"in-envelope={bundle.in_envelope}) …")
     plan = decompose(
