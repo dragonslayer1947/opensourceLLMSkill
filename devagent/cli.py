@@ -8,14 +8,6 @@ import sys
 import urllib.request
 from pathlib import Path
 
-# Windows consoles may default to cp1252 and choke on the glyphs we print (→, ✓, …).
-# Force UTF-8 so the CLI renders correctly in PowerShell / cmd / pipes.
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
-    except Exception:  # noqa: BLE001 — older/detached streams: best effort
-        pass
-
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -23,7 +15,15 @@ from rich.table import Table
 from . import ledger, pipeline, report
 from .config import CONFIG_PATH, ensure_config, load_config
 from .models.registry import Registry
-from .models.router import Router
+from .models.router import Router, RoutingError
+
+# Windows consoles may default to cp1252 and choke on the glyphs we print (→, ✓, …).
+# Force UTF-8 so the CLI renders correctly in PowerShell / cmd / pipes.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001 — older/detached streams: best effort
+        pass
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -69,7 +69,7 @@ def run(
     try:
         result = pipeline.run(task, path, dry_run=dry_run, assume_yes=yes, console=console,
                               files=list(file or []), role_overrides=overrides)
-    except pipeline.RoutingError as e:
+    except RoutingError as e:
         console.print(f"\n[red]model error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")
         raise typer.Exit(1)

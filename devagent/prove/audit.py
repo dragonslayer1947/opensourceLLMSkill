@@ -9,7 +9,6 @@ Honest caveat: the judge is an LLM (position/verbosity bias); blinding mitigates
 deterministic gate, not this, is the quality floor."""
 from __future__ import annotations
 
-import json
 import random
 import re
 from dataclasses import dataclass

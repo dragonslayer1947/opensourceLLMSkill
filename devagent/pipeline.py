@@ -23,8 +23,8 @@ from .execute import apply as ap
 from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .models.registry import Registry
-from .models.router import Router, RoutingError
-from .validate.gate import GateReport, run_gate
+from .models.router import Router
+from .validate.gate import run_gate
 
 
 @dataclass
@@ -181,7 +181,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         console.print(f"  decomposed into [bold]{len(plan.subtasks)}[/bold] subtasks "
                       f"(planner: {plan.planner_model})")
     else:
-        console.print(f"  in-envelope → [bold]direct[/bold] (1 subtask, no frontier call, ~$0)")
+        console.print("  in-envelope → [bold]direct[/bold] (1 subtask, no frontier call, ~$0)")
 
     for st in plan.subtasks:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
