@@ -23,3 +23,7 @@ devagent = "devagent.cli:app"
 
 [tool.setuptools.packages.find]
 include = ["devagent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
