@@ -28,19 +28,29 @@ class CLIClient(ModelClient):
         self.timeout_s = timeout_s
         self.exe = shutil.which(command) or command
 
-    def _args(self, system: str) -> list[str]:
+    def _invocation(self, system: str, user: str) -> tuple[list[str], str, Path | None]:
+        """Return (args, stdin_text, output_file). output_file is set for adapters that write
+        their final answer to a file (codex) rather than parseable stdout."""
         if self.mode == "claude":
-            return [self.exe, "-p", "--output-format", "json",
+            args = [self.exe, "-p", "--output-format", "json",
                     "--model", self.model_id, "--append-system-prompt", system]
-        # generic / experimental: prompt via stdin, plain text out
-        return [self.exe, "-p"]
+            return args, user, None
+        if self.mode == "codex":
+            CLI_IO_DIR.mkdir(parents=True, exist_ok=True)
+            out = CLI_IO_DIR / f"codex-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.out.txt"
+            args = [self.exe, "exec", "-m", self.model_id, "-s", "read-only",
+                    "--skip-git-repo-check", "-C", str(NEUTRAL_CWD), "--color", "never",
+                    "-o", str(out), "-"]
+            return args, f"{system}\n\n{user}", out
+        # generic: prompt via stdin, plain text on stdout
+        return [self.exe, "-p"], f"{system}\n\n{user}", None
 
     def complete(self, system, user, *, max_tokens=None, temperature=None, cacheable_system=False):
         NEUTRAL_CWD.mkdir(parents=True, exist_ok=True)
-        args = self._args(system)
+        args, stdin_text, out_file = self._invocation(system, user)
         try:
             p = subprocess.run(
-                args, input=user, capture_output=True, text=True,
+                args, input=stdin_text, capture_output=True, text=True,
                 encoding="utf-8", timeout=self.timeout_s, cwd=str(NEUTRAL_CWD),
             )
         except FileNotFoundError:
@@ -48,8 +58,14 @@ class CLIClient(ModelClient):
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"CLI '{self.command}' timed out after {self.timeout_s}s")
 
-        text, cost, tin, tout = self._parse(p.stdout, system, user)
-        self._persist(args, user, p.stdout, p.stderr)
+        if out_file is not None:
+            # codex / file-output adapters: the final message is written to out_file
+            text = out_file.read_text(encoding="utf-8", errors="replace").strip() if out_file.exists() else ""
+            cost, tin, tout = 0.0, estimate_tokens(system + user), estimate_tokens(text)
+        else:
+            text, cost, tin, tout = self._parse(p.stdout, system, user)
+
+        self._persist(args, stdin_text, p.stdout, p.stderr)
         if not text and p.returncode != 0:
             raise RuntimeError(f"CLI '{self.command}' failed (exit {p.returncode}): {p.stderr.strip()[:300]}")
         return CompletionResult(text=text, tokens_in=tin, tokens_out=tout,

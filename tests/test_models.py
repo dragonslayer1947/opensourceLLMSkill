@@ -76,3 +76,19 @@ def test_cli_parse_claude_error_raises():
         assert False, "expected RuntimeError on is_error"
     except RuntimeError:
         pass
+
+
+def test_claude_invocation_uses_stdin_and_system():
+    c = CLIClient("cli", "opus", "cli", {}, command="claude", mode="claude", timeout_s=1)
+    args, stdin_text, out_file = c._invocation("SYS", "USER")
+    assert "-p" in args and "--output-format" in args and "--model" in args
+    assert "opus" in args and "SYS" in args            # system passed as flag
+    assert stdin_text == "USER" and out_file is None   # user prompt via stdin
+
+
+def test_codex_invocation_reads_stdin_writes_file():
+    c = CLIClient("cx", "gpt", "cli", {}, command="codex", mode="codex", timeout_s=1)
+    args, stdin_text, out_file = c._invocation("SYS", "USER")
+    assert args[1] == "exec" and "read-only" in args and args[-1] == "-"
+    assert "SYS" in stdin_text and "USER" in stdin_text  # codex has no system flag → folded in
+    assert out_file is not None and str(out_file).endswith(".out.txt")

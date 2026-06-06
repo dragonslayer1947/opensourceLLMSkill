@@ -45,11 +45,11 @@ model_id  = "opus"
 tier      = "cli"
 timeout_s = 400
 
-# Codex CLI (experimental adapter):
+# Codex CLI (experimental adapter — `codex exec`, sandbox read-only):
 # [models.codex-cli]
 # protocol = "cli"
 # command  = "codex"
-# mode     = "generic"
+# mode     = "codex"
 # model_id = "gpt-5.1-codex"
 # tier     = "cli"
 
