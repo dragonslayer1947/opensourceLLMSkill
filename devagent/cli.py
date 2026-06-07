@@ -367,6 +367,26 @@ def gen_tests(
 
 
 @app.command()
+def search(
+    query: str = typer.Argument(..., help="What to find."),
+    path: str = typer.Option(".", "--path", "-p"),
+    limit: int = typer.Option(10, "--limit", "-n"),
+):
+    """Three-tier retrieval (exact + BM25 + graph) — rank files for a query."""
+    from .context import rag
+    from .context.cache import build_index_cached
+    from .planning.blast_radius import build_dependents
+    root = Path(path).resolve()
+    idx = build_index_cached(root)
+    ranked = rag.rank_files(idx, query, dependents=build_dependents(idx), limit=limit)
+    if not ranked:
+        console.print("[dim]no matches[/dim]")
+        return
+    for i, rel in enumerate(ranked, 1):
+        console.print(f"  {i:>2}. {rel}")
+
+
+@app.command()
 def status(path: str = typer.Option(".", "--path", "-p")):
     """Doctor: config, model reachability, gate tools, git."""
     ensure_config()

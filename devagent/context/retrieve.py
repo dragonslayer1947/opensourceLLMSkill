@@ -5,16 +5,11 @@ assemble a context bundle capped at the envelope's token budget. Large files are
 No model call, no repo dump — the executor sees only the relevant slice."""
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
+from . import rag
 from .index import RepoIndex
 from .window import FileView, view_file
-
-_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_STOP = {"the", "a", "an", "to", "of", "in", "and", "or", "add", "fix", "update", "make",
-         "for", "with", "on", "this", "that", "it", "is", "be", "function", "file", "code"}
 
 
 @dataclass
@@ -36,32 +31,6 @@ def _tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _task_terms(task: str) -> set[str]:
-    return {w.lower() for w in _WORD.findall(task) if w.lower() not in _STOP and len(w) > 2}
-
-
-def _score_file(entry, terms: set[str], explicit_paths: set[str]) -> float:
-    score = 0.0
-    rel_l = entry.rel.lower()
-    if entry.rel in explicit_paths or Path(entry.rel).name in explicit_paths:
-        score += 100.0
-    for t in terms:
-        if t in rel_l:
-            score += 3.0
-    for sym in getattr(entry, "symbols", []):
-        name_l = sym.name.lower()
-        for t in terms:
-            if t == name_l or t == name_l.split(".")[-1]:
-                score += 5.0
-            elif t in name_l:
-                score += 1.5
-    # content-term overlap: matches tasks that reference code in file bodies, not just names
-    body = getattr(entry, "terms", set())
-    if body:
-        score += 2.0 * len(terms & body)
-    return score
-
-
 def retrieve(
     index: RepoIndex,
     task: str,
@@ -71,19 +40,30 @@ def retrieve(
     max_files: int = 4,
     explicit_paths: set[str] | None = None,
 ) -> ContextBundle:
-    terms = _task_terms(task)
+    from ..planning.blast_radius import build_dependents
     explicit = explicit_paths or set()
-    scored = [(e, _score_file(e, terms, explicit)) for e in index.files]
-    scored = [(e, s) for e, s in scored if s > 0]
-    scored.sort(key=lambda x: x[1], reverse=True)
+    by_rel = {e.rel: e for e in index.files}
 
-    bundle = ContextBundle(candidate_files=[e.rel for e, _ in scored[:10]])
+    # Three-tier ranking (exact + BM25 + graph). Explicit paths are forced to the front.
+    dependents = build_dependents(index) if index.files else {}
+    ranked = rag.rank_files(index, task, dependents=dependents, limit=10)
+    explicit_rels = [e.rel for e in index.files
+                     if e.rel in explicit or e.rel.rsplit("/", 1)[-1] in explicit]
+    ordered = explicit_rels + [r for r in ranked if r not in explicit_rels]
+
+    bundle = ContextBundle(candidate_files=ordered[:10])
+    if not ordered:
+        return bundle
+
     budget = max_context_tokens
-    # Pick a focus symbol per file from the highest-scoring matching symbol.
-    for entry, _ in scored[:max_files]:
+    qterms = set(rag.tokenize(task))
+    for rel in ordered[:max_files]:
+        entry = by_rel.get(rel)
+        if entry is None:
+            continue
         focus_symbol = None
         for sym in getattr(entry, "symbols", []):
-            if any(t in sym.name.lower() for t in terms):
+            if any(t in sym.name.lower() for t in qterms):
                 focus_symbol = sym.name
                 break
         view = view_file(entry.path, entry.rel, max_file_lines=max_file_lines, focus_symbol=focus_symbol)
