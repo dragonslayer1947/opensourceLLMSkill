@@ -213,7 +213,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         files: list[str] | None = None, role_overrides: dict[str, str] | None = None,
         audit: bool = False, flags: set[str] | None = None,
         contract: bool = True, review: bool = False, test: bool = False,
-        parallel: bool = False) -> RunResult:
+        parallel: bool = False, from_plan: str | None = None) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
@@ -267,55 +267,67 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         constraints = (constraints + "\n\nPAST INCIDENTS (do not repeat):\n"
                        + incidents_mod.lessons_context(relevant_incidents)).strip()
 
-    # Routing classifier — decide direct vs plan→execute up front (free, deterministic).
-    max_ctx = int(config.envelope.get("max_context_tokens", 12000))
-    has_pattern = bool(pattern_registry.relevant(
-        pattern_registry.load_patterns(task_root), task))
-    decision = classify(task, in_envelope=bundle.in_envelope, est_tokens=bundle.est_tokens,
-                        max_context_tokens=max_ctx, has_pattern=has_pattern)
-    console.print(f"[bold]Routing[/bold]: {decision.route} (score {decision.score}"
-                  + (f" — {', '.join(decision.reasons)}" if decision.reasons else "") + ")")
-    tr.record("routing", route=decision.route, score=decision.score, reasons=decision.reasons)
-
-    # Contract-first for API tasks — generate + validate an OpenAPI spec before implementing.
-    contract_doc = None
-    if contract and contract_mod.is_api_task(task):
-        try:
-            with activity(console, "Drafting + validating the OpenAPI contract"):
-                cr = contract_mod.generate_contract(task, bundle.render(), router)
-            result.calls.append(Call(cr.model or "?", cr.tier or "local",
-                                     cr.tokens_in, cr.tokens_out, cr.cost_usd))
-            if cr.spec and cr.valid:
-                contract_doc = cr.spec
-                contract_mod.save_contract(task_root, session_id, cr.yaml_text)
-                constraints = (constraints + "\n\nAPI CONTRACT (implement exactly):\n"
-                               + cr.yaml_text).strip()
-                console.print("[green]contract-first[/green]: OpenAPI spec generated + validated")
-            else:
-                console.print(f"[yellow]contract skipped[/yellow]: {'; '.join(cr.errors) or 'invalid'}")
-        except Exception as e:  # noqa: BLE001 — contract-first is best-effort
-            console.print(f"[yellow]contract skipped[/yellow]: {e}")
-
-    console.print(f"[bold]Decomposing[/bold] (retrieved ~{bundle.est_tokens} ctx tokens, "
-                  f"in-envelope={bundle.in_envelope}) …")
-    with activity(console, "Planning subtasks (consulting the planner)"):
-        plan = decompose(
-            task, index, bundle, router,
-            max_subtask_files=int(config.envelope.get("max_subtask_files", 3)),
-            # Classifier may ESCALATE to decomposition; it never suppresses a structurally
-            # necessary one (large/windowed/multi-file still decompose via should_decompose).
-            force_decompose=(decision.route == "plan_execute"),
-        )
-    result.plan = plan
-    tr.record("decompose", decomposed=plan.decomposed, n_subtasks=len(plan.subtasks),
-              planner=plan.planner_model)
-    if plan.decomposed:
-        result.calls.append(Call(plan.planner_model or "?", plan.planner_tier or "cli",
-                                 plan.tokens_in, plan.tokens_out, plan.cost_usd))
-        console.print(f"  decomposed into [bold]{len(plan.subtasks)}[/bold] subtasks "
-                      f"(planner: {plan.planner_model})")
+    if from_plan:
+        # Execute a previously-reviewed plan verbatim — no routing, no re-decomposition.
+        from .planning import plan_store
+        loaded_task, plan = plan_store.load_plan(task_root, from_plan)
+        if not task:
+            task = loaded_task
+        result.plan = plan
+        contract_doc = None
+        console.print(f"[bold]Using saved plan[/bold] [cyan]{from_plan}[/cyan]: "
+                      f"{len(plan.subtasks)} subtasks (no re-decomposition)")
+        tr.record("plan_loaded", ref=from_plan, n_subtasks=len(plan.subtasks))
     else:
-        console.print("  in-envelope → [bold]direct[/bold] (1 subtask, no frontier call, ~$0)")
+        # Routing classifier — decide direct vs plan→execute up front (free, deterministic).
+        max_ctx = int(config.envelope.get("max_context_tokens", 12000))
+        has_pattern = bool(pattern_registry.relevant(
+            pattern_registry.load_patterns(task_root), task))
+        decision = classify(task, in_envelope=bundle.in_envelope, est_tokens=bundle.est_tokens,
+                            max_context_tokens=max_ctx, has_pattern=has_pattern)
+        console.print(f"[bold]Routing[/bold]: {decision.route} (score {decision.score}"
+                      + (f" — {', '.join(decision.reasons)}" if decision.reasons else "") + ")")
+        tr.record("routing", route=decision.route, score=decision.score, reasons=decision.reasons)
+
+        # Contract-first for API tasks — generate + validate an OpenAPI spec before implementing.
+        contract_doc = None
+        if contract and contract_mod.is_api_task(task):
+            try:
+                with activity(console, "Drafting + validating the OpenAPI contract"):
+                    cr = contract_mod.generate_contract(task, bundle.render(), router)
+                result.calls.append(Call(cr.model or "?", cr.tier or "local",
+                                         cr.tokens_in, cr.tokens_out, cr.cost_usd))
+                if cr.spec and cr.valid:
+                    contract_doc = cr.spec
+                    contract_mod.save_contract(task_root, session_id, cr.yaml_text)
+                    constraints = (constraints + "\n\nAPI CONTRACT (implement exactly):\n"
+                                   + cr.yaml_text).strip()
+                    console.print("[green]contract-first[/green]: OpenAPI spec generated + validated")
+                else:
+                    console.print(f"[yellow]contract skipped[/yellow]: {'; '.join(cr.errors) or 'invalid'}")
+            except Exception as e:  # noqa: BLE001 — contract-first is best-effort
+                console.print(f"[yellow]contract skipped[/yellow]: {e}")
+
+        console.print(f"[bold]Decomposing[/bold] (retrieved ~{bundle.est_tokens} ctx tokens, "
+                      f"in-envelope={bundle.in_envelope}) …")
+        with activity(console, "Planning subtasks (consulting the planner)"):
+            plan = decompose(
+                task, index, bundle, router,
+                max_subtask_files=int(config.envelope.get("max_subtask_files", 3)),
+                # Classifier may ESCALATE to decomposition; it never suppresses a structurally
+                # necessary one (large/windowed/multi-file still decompose via should_decompose).
+                force_decompose=(decision.route == "plan_execute"),
+            )
+        result.plan = plan
+        tr.record("decompose", decomposed=plan.decomposed, n_subtasks=len(plan.subtasks),
+                  planner=plan.planner_model)
+        if plan.decomposed:
+            result.calls.append(Call(plan.planner_model or "?", plan.planner_tier or "cli",
+                                     plan.tokens_in, plan.tokens_out, plan.cost_usd))
+            console.print(f"  decomposed into [bold]{len(plan.subtasks)}[/bold] subtasks "
+                          f"(planner: {plan.planner_model})")
+        else:
+            console.print("  in-envelope → [bold]direct[/bold] (1 subtask, no frontier call, ~$0)")
 
     # Blast radius — impact analysis before any execution.
     planned = sorted(file_set | {f for st in plan.subtasks for f in st.target_files}
@@ -546,9 +558,11 @@ def plan_only(task: str, path: str, *, console: Console,
         color = {"low": "green", "medium": "yellow", "high": "red"}[br.level]
         console.print(f"[{color}]{br.render()}[/{color}]")
 
-    snippet = task if len(task) <= 50 else task[:50] + "…"
-    console.print(f"\n[dim]execute it:[/dim] devagent run \"{snippet}\"  "
-                  f"[dim](or just type the task in the shell — the local model executes each step)[/dim]")
+    from .planning import plan_store
+    plan_id, plan_path = plan_store.save_plan(task_root, task, plan)
+    console.print(f"\n[dim]saved plan[/dim] [cyan]{plan_id}[/cyan] [dim]→ {plan_path}[/dim]")
+    console.print(f"[dim]review/edit that file, then execute exactly it:[/dim] "
+                  f"devagent run --from-plan {plan_id}")
     return PlanPreview(plan, decision.route, bundle.est_tokens, level, score)
 
 

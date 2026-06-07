@@ -57,9 +57,10 @@ def _main(
 
 @app.command()
 def run(
-    task: str = typer.Argument(..., help="What to do, in natural language."),
+    task: str = typer.Argument(None, help="What to do, in natural language. Omit when using --from-plan."),
     path: str = typer.Option(".", "--path", "-p", help="Repo to work in."),
     file: list[str] = typer.Option(None, "--file", "-f", help="Target existing file(s) explicitly (repeatable)."),
+    from_plan: str = typer.Option(None, "--from-plan", help="Execute a saved plan id/path verbatim (skip decomposition). See `devagent plan`."),
     executor: str = typer.Option(None, "--executor", help="Override the executor model for this run."),
     planner: str = typer.Option(None, "--planner", help="Override the planner model for this run."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show intended edits, write nothing."),
@@ -71,19 +72,24 @@ def run(
     test: bool = typer.Option(False, "--test", help="Run the test suite after applying; auto-rollback on failure."),
     parallel: bool = typer.Option(False, "--parallel", help="Run independent subtasks concurrently in dependency-ordered, file-disjoint waves."),
 ):
-    """Decompose a task into in-envelope subtasks, execute locally, gate, and apply."""
+    """Decompose a task into in-envelope subtasks, execute locally, gate, and apply.
+
+    With --from-plan, skips decomposition and executes a plan you saved/edited via `devagent plan`."""
+    if not task and not from_plan:
+        console.print("[yellow]give a task, or --from-plan <id> (see `devagent plan`)[/yellow]")
+        raise typer.Exit(2)
     overrides: dict[str, str] = {}
     if executor:
         overrides["executor"] = executor
     if planner:
         overrides["planner"] = planner
     try:
-        result = pipeline.run(task, path, dry_run=dry_run, assume_yes=yes, console=console,
+        result = pipeline.run(task or "", path, dry_run=dry_run, assume_yes=yes, console=console,
                               files=list(file or []), role_overrides=overrides, audit=audit,
                               flags=set(flag or []), contract=contract, review=review, test=test,
-                              parallel=parallel)
-    except RoutingError as e:
-        console.print(f"\n[red]model error:[/red] {e}")
+                              parallel=parallel, from_plan=from_plan)
+    except (RoutingError, FileNotFoundError, ValueError) as e:
+        console.print(f"\n[red]error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")
         raise typer.Exit(1)
     _run_summary(result)
