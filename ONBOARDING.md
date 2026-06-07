@@ -16,9 +16,10 @@ per-token API billing**. Savings and quality are both measured.
 
 ## Status
 
-- **V1 (kernel)** and **V1.5 (knowledge & routing)**: COMPLETE — 79 offline tests, ruff-clean,
-  CI matrix (ubuntu/windows × py3.11/3.12). Verified end-to-end on the claude subscription.
-- **V2 (multi-service)**: in progress (see "Roadmap").
+- **V1 (kernel)**, **V1.5 (knowledge & routing)**, **V2 (multi-service)**: COMPLETE — 105
+  offline tests, ruff-clean, CI matrix (ubuntu/windows × py3.11/3.12). Verified end-to-end on the
+  claude subscription. No external binaries required.
+- **V3 (parallel agents, reviewer, test-runner)**: next.
 - Repo: local git at `C:\Users\ADMIN\devagent` on `main`. **No remote yet** — to publish:
   `git remote add origin <url> && git push -u origin main`.
 
@@ -96,10 +97,11 @@ Per-repo config lives under `.devagent/`: `rules.yaml`, `adrs/`, `registry/servi
 
 ## Roadmap (SPEC.md is the source of truth)
 
-- **V2** (in progress): cross-service dependency graph, OpenAPI breaking-change diff (pure
-  Python — no `oasdiff`/`buf` binary), service-level blast radius, write locks, session token/cost
-  budget, repo-graph caching.
-- **V3**: parallel agents (file claims), reviewer agent, test runner with auto-rollback, sessions.
+- **V2** (DONE): cross-service dependency graph, OpenAPI breaking-change diff (pure Python — no
+  `oasdiff`/`buf`), service-level blast radius, write locks, session token/cost budget,
+  repo-graph caching, `services --check` contract-validation pipeline.
+- **V3** (next): parallel agents (on the write-lock foundation), reviewer agent, test runner with
+  auto-rollback.
 - **V4**: semantic RAG, pattern enforcement at write time, compliance rule sets.
 - **V5**: autonomous long-horizon (epic decomposition, org-workflow integration).
 

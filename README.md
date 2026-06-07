@@ -68,15 +68,20 @@ devagent --version
 
 # Knowledge & routing (V1.5)
 devagent rules [--init]              # safety rules (.devagent/rules.yaml): block/warn/require_flag
-devagent services [--init]           # service registry; `service <name>` shows one
+devagent services [--init] [--check] # service registry; --check = cross-service contract validation
+devagent service <name>              # one service + transitive downstream consumers
 devagent adr list|show|new|check     # ADRs; `check` is a semantic diff check via the local model
 devagent pattern list|add|deprecate  # learned patterns with confidence decay
 devagent contract "<api task>"       # generate + validate an OpenAPI contract (no implementation)
+
+# Multi-service (V2)
+devagent contract-diff OLD NEW       # OpenAPI breaking-change diff (pure Python; exit 1 on breaking)
 ```
 
-The run pipeline (V1.5): retrieve → **route** (classifier) → **contract-first** (API tasks) →
-decompose → **blast radius** → per subtask: execute (with ADR + pattern context) → **safety
-rules** → gate → escalate → apply → **conformance** → ledger.
+The run pipeline (V2): retrieve (cached index) → **route** (classifier) → **contract-first**
+(API tasks) → decompose → **blast radius** (file + service level) → **write-locks** → per
+subtask: execute (ADR + pattern context) → **safety rules** → gate → escalate → apply →
+**conformance** → ledger. A per-session **token/cost budget** can hard-stop the run.
 
 ## How a run works
 

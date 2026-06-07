@@ -16,9 +16,15 @@ Working name: `devagent`. Target: production super-apps at Amazon/Flipkart scale
 > with semantic enforcement (gap #4), pattern registry with confidence decay (gap #11), routing
 > classifier, and contract-first with conformance diff-back (gap #6).
 >
+> **V2 (multi-service) status: BUILT.** Cross-service dependency graph + service-level blast
+> radius; pure-Python OpenAPI breaking-change diff (`contract-diff`) and the cross-service
+> contract-validation pipeline (`services --check`); file write-locks; per-session token/cost
+> budget; fingerprint-keyed repo-index cache. 105 offline tests, ruff-clean. No external
+> binaries required (oasdiff/buf replaced by the pure-Python diff).
+>
 > Remaining before "production": run the executor against a live local llama.cpp server, the
-> 20-task acceptance benchmark, and the V2 items below (multi-service graph, cross-service
-> contract validation, write locks).
+> 20-task acceptance benchmark, and V3 (parallel agents on the write-lock foundation, reviewer
+> agent, test-runner with auto-rollback).
 
 ---
 
