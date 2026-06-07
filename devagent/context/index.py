@@ -91,6 +91,9 @@ class FileEntry:
     routes_used: set[str] = field(default_factory=set)     # route keys this file CALLS
     topics: set[str] = field(default_factory=set)          # pub/sub topic names this file touches
     vector: list[float] | None = None                      # optional semantic embedding (gap #4)
+    lang: str = "other"                                    # py | js | other
+    import_specs: list[str] = field(default_factory=list)  # raw module specifiers (js/ts: './x')
+    import_targets: set[str] = field(default_factory=set)  # resolved repo-relative dependency files
 
 
 @dataclass
@@ -179,8 +182,73 @@ def _service_signals(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
     return {k for k in defined if k}, {k for k in used if k}, topics
 
 
+JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+
+# JS/TS heuristic extraction (gap #4, phase 1 — pre-tree-sitter). Regex-based: catches the common
+# 90% (ES module imports, requires, exported symbols) deterministically and with no dependency.
+# Tree-sitter replaces these with real parse trees in a later phase (see docs/MULTI_LANGUAGE.md).
+_JS_IMPORT = re.compile(
+    r"""(?:import\s[^'"]*?from\s*['"]([^'"]+)['"])"""      # import x from 'spec'
+    r"""|(?:import\s*['"]([^'"]+)['"])"""                   # import 'spec'
+    r"""|(?:export\s[^'"]*?from\s*['"]([^'"]+)['"])"""      # export ... from 'spec'
+    r"""|(?:require\(\s*['"]([^'"]+)['"]\s*\))"""           # require('spec')
+    r"""|(?:import\(\s*['"]([^'"]+)['"]\s*\))""")           # dynamic import('spec')
+_JS_DEF = re.compile(
+    r"""export\s+(?:default\s+)?(?:async\s+)?(function|class|const|let|var)\s+([A-Za-z_$][\w$]*)""")
+_JS_NAMED_EXPORT = re.compile(r"""export\s*\{([^}]*)\}""")
+
+
+def _parse_js(path: Path, rel: str, text: str) -> FileEntry:
+    entry = FileEntry(path=path, rel=rel, lines=text.count("\n") + 1,
+                      terms=_content_terms(text), lang="js")
+    specs: list[str] = []
+    for m in _JS_IMPORT.finditer(text):
+        spec = next((g for g in m.groups() if g), None)
+        if spec:
+            specs.append(spec)
+    entry.import_specs = specs
+    for m in _JS_DEF.finditer(text):
+        kind, name = m.group(1), m.group(2)
+        entry.symbols.append(Symbol(
+            name=name, kind="class" if kind == "class" else "function",
+            signature=f"export {kind} {name}",
+            lineno=text.count("\n", 0, m.start()) + 1, end_lineno=0))
+    for m in _JS_NAMED_EXPORT.finditer(text):
+        for raw in m.group(1).split(","):
+            name = raw.split(" as ")[-1].strip()
+            if name and name.isidentifier():
+                entry.symbols.append(Symbol(name=name, kind="function",
+                                            signature=f"export {{ {name} }}", lineno=0, end_lineno=0))
+    return entry
+
+
+def _resolve_js_import(importer_rel: str, spec: str, relset: set[str]) -> str | None:
+    """Resolve a relative JS/TS import specifier to a repo file (best-effort, like Node)."""
+    if not spec.startswith("."):
+        return None  # bare specifier => external package
+    base = importer_rel.rsplit("/", 1)[0] if "/" in importer_rel else ""
+    parts = (base.split("/") if base else []) + spec.split("/")
+    stack: list[str] = []
+    for p in parts:
+        if p in ("", "."):
+            continue
+        if p == "..":
+            if stack:
+                stack.pop()
+        else:
+            stack.append(p)
+    cand = "/".join(stack)
+    options = [cand] + [f"{cand}{ext}" for ext in JS_SUFFIXES] \
+        + [f"{cand}/index{ext}" for ext in JS_SUFFIXES]
+    for o in options:
+        if o in relset:
+            return o
+    return None
+
+
 def _parse_python(path: Path, rel: str, text: str) -> FileEntry:
-    entry = FileEntry(path=path, rel=rel, lines=text.count("\n") + 1, terms=_content_terms(text))
+    entry = FileEntry(path=path, rel=rel, lines=text.count("\n") + 1, terms=_content_terms(text),
+                      lang="py")
     try:
         tree = ast.parse(text)
     except SyntaxError:
@@ -222,8 +290,18 @@ def build_index(root: str | Path) -> RepoIndex:
             continue
         if path.suffix == ".py":
             index.files.append(_parse_python(path, rel, text))
+        elif path.suffix in JS_SUFFIXES:
+            index.files.append(_parse_js(path, rel, text))
         else:
-            # Non-Python: no ast symbols, but content terms still enable retrieval.
+            # Unknown language: no symbols, but content terms still enable retrieval.
             index.files.append(FileEntry(
                 path=path, rel=rel, lines=text.count("\n") + 1, terms=_content_terms(text)))
+
+    # Resolve JS/TS relative imports to repo files now that every rel path is known (phase 1 of
+    # gap #4) — this is what lets the blast radius span JS/TS, not just Python.
+    relset = {f.rel for f in index.files}
+    for f in index.files:
+        if f.lang == "js" and f.import_specs:
+            f.import_targets = {t for s in f.import_specs
+                                if (t := _resolve_js_import(f.rel, s, relset))}
     return index

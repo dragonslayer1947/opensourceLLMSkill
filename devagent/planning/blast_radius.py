@@ -54,6 +54,10 @@ def build_dependents(index: RepoIndex) -> dict[str, set[str]]:
             target = key_to_file.get(imp) or key_to_file.get(imp.split(".")[-1])
             if target and target != f.rel:
                 dependents[target].add(f.rel)
+        # JS/TS: imports are already resolved to repo files (gap #4) — add those edges directly.
+        for target in getattr(f, "import_targets", ()) or ():
+            if target in dependents and target != f.rel:
+                dependents[target].add(f.rel)
 
     # Merge cross-service (HTTP/queue) runtime edges — coupling the import graph can't see.
     from . import service_edges

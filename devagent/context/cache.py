@@ -31,6 +31,8 @@ def _index_to_dict(index: RepoIndex) -> dict:
         "imports": f.imports, "terms": sorted(f.terms),
         "routes_defined": sorted(f.routes_defined), "routes_used": sorted(f.routes_used),
         "topics": sorted(f.topics), "vector": f.vector,
+        "lang": f.lang, "import_specs": f.import_specs,
+        "import_targets": sorted(f.import_targets),
     } for f in index.files]}
 
 
@@ -44,6 +46,8 @@ def _index_from_dict(root: Path, data: dict) -> RepoIndex:
             routes_defined=set(fd.get("routes_defined", [])),
             routes_used=set(fd.get("routes_used", [])),
             topics=set(fd.get("topics", [])), vector=fd.get("vector"),
+            lang=fd.get("lang", "other"), import_specs=list(fd.get("import_specs", [])),
+            import_targets=set(fd.get("import_targets", [])),
         ))
     return index
 
