@@ -277,6 +277,10 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         contract_doc = None
         console.print(f"[bold]Using saved plan[/bold] [cyan]{from_plan}[/cyan]: "
                       f"{len(plan.subtasks)} subtasks (no re-decomposition)")
+        for msg in plan_store.validate_plan(
+                task_root, plan.subtasks,
+                max_files=int(config.envelope.get("max_subtask_files", 3))):
+            console.print(f"[yellow]plan issue[/yellow]: {msg}")
         tr.record("plan_loaded", ref=from_plan, n_subtasks=len(plan.subtasks))
     else:
         # Routing classifier — decide direct vs plan→execute up front (free, deterministic).

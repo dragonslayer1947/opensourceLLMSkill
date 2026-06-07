@@ -66,6 +66,44 @@ def test_subtasks_from_data_parses_and_skips_garbage():
     assert subs[1].depends_on == ["s1"]
 
 
+def test_validate_clean_plan(tmp_path):
+    subs = plan_store.subtasks_from_data([
+        {"id": "s1", "description": "a", "target_files": ["a.py"], "depends_on": []},
+        {"id": "s2", "description": "b", "target_files": ["b.py"], "depends_on": ["s1"]},
+    ])
+    assert plan_store.validate_plan(tmp_path, subs) == []
+
+
+def test_validate_flags_dangling_dep_dupes_envelope_and_cycle(tmp_path):
+    subs = plan_store.subtasks_from_data([
+        {"id": "s1", "description": "", "target_files": ["a.py", "b.py", "c.py", "d.py"],
+         "depends_on": ["ghost"]},
+        {"id": "s1", "description": "dup id", "target_files": [], "depends_on": []},
+    ])
+    issues = " ".join(plan_store.validate_plan(tmp_path, subs, max_files=3))
+    assert "empty description" in issues
+    assert "unknown subtask 'ghost'" in issues
+    assert "> envelope" in issues
+    assert "duplicate subtask id 's1'" in issues
+
+
+def test_validate_detects_cycle(tmp_path):
+    subs = plan_store.subtasks_from_data([
+        {"id": "s1", "description": "a", "target_files": ["a.py"], "depends_on": ["s2"]},
+        {"id": "s2", "description": "b", "target_files": ["b.py"], "depends_on": ["s1"]},
+    ])
+    issues = " ".join(plan_store.validate_plan(tmp_path, subs))
+    assert "cycle" in issues
+
+
+def test_validate_flags_out_of_repo_path(tmp_path):
+    subs = plan_store.subtasks_from_data([
+        {"id": "s1", "description": "x", "target_files": ["../escape.py"], "depends_on": []},
+    ])
+    issues = " ".join(plan_store.validate_plan(tmp_path, subs))
+    assert "outside the repo" in issues
+
+
 def test_host_authored_plan_imports_and_runs_back(tmp_path):
     """The skill's path: a host-authored JSON plan saved, then loadable for `run --from-plan`."""
     items = [{"id": "s1", "description": "add repo", "target_files": ["repo.py"], "depends_on": []}]

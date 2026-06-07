@@ -65,6 +65,63 @@ def subtasks_from_data(items) -> list[Subtask]:
     return out
 
 
+def _has_cycle(subtasks: list[Subtask]) -> list[str]:
+    """Return the ids involved in a dependency cycle (empty if acyclic)."""
+    graph = {s.id: [d for d in s.depends_on] for s in subtasks}
+    state: dict[str, int] = {}  # 0=visiting, 1=done
+    cycle: list[str] = []
+
+    def visit(node: str, stack: list[str]) -> bool:
+        if state.get(node) == 1:
+            return False
+        if state.get(node) == 0:
+            cycle.extend(stack[stack.index(node):] if node in stack else [node])
+            return True
+        state[node] = 0
+        for dep in graph.get(node, []):
+            if dep in graph and visit(dep, stack + [node]):
+                return True
+        state[node] = 1
+        return False
+
+    for s in subtasks:
+        if state.get(s.id) is None and visit(s.id, []):
+            break
+    return sorted(set(cycle))
+
+
+def validate_plan(root: Path, subtasks: list[Subtask], max_files: int = 3) -> list[str]:
+    """Structural checks before execution. Returns human-readable issues (empty = clean).
+
+    Catches the ways a hand/host-authored plan goes wrong: duplicate ids, dangling/cyclic
+    dependencies, empty descriptions, subtasks over the file envelope, and suspicious paths.
+    New files are fine, so a non-existent target_file is NOT an error."""
+    issues: list[str] = []
+    ids = [s.id for s in subtasks]
+    seen: set[str] = set()
+    for sid in ids:
+        if sid in seen:
+            issues.append(f"duplicate subtask id '{sid}'")
+        seen.add(sid)
+    idset = set(ids)
+    for s in subtasks:
+        if not s.description:
+            issues.append(f"{s.id}: empty description")
+        if len(s.target_files) > max_files:
+            issues.append(f"{s.id}: touches {len(s.target_files)} files (> envelope of {max_files})")
+        for d in s.depends_on:
+            if d not in idset:
+                issues.append(f"{s.id}: depends_on unknown subtask '{d}'")
+        for f in s.target_files:
+            norm = f.replace("\\", "/")
+            if norm.startswith("/") or ".." in norm.split("/") or (len(norm) > 1 and norm[1] == ":"):
+                issues.append(f"{s.id}: target path '{f}' is outside the repo")
+    cyc = _has_cycle(subtasks)
+    if cyc:
+        issues.append(f"dependency cycle among: {', '.join(cyc)}")
+    return issues
+
+
 def load_plan(root: Path, ref: str) -> tuple[str, Plan]:
     """Load a plan by id or by file path. Returns (task, Plan). Raises FileNotFoundError."""
     cand = Path(ref)

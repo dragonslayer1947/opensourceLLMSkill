@@ -142,6 +142,7 @@ def plan_import(
     file: str = typer.Option(None, "--file", "-f", help="JSON file of subtasks; omit to read stdin."),
     path: str = typer.Option(".", "--path", "-p"),
     planner_name: str = typer.Option("host-agent", "--planner-name", help="Who authored the plan."),
+    strict: bool = typer.Option(False, "--strict", help="Fail if the plan has validation issues."),
 ):
     """Save a plan authored by a host agent (the decompose-execute skill) for `run --from-plan`.
 
@@ -160,8 +161,17 @@ def plan_import(
     if not subtasks:
         console.print("[red]no subtasks in the imported plan[/red]")
         raise typer.Exit(2)
+    root = Path(path).resolve()
+    cfg = load_config()
+    issues = plan_store.validate_plan(root, subtasks,
+                                      max_files=int(cfg.envelope.get("max_subtask_files", 3)))
+    for msg in issues:
+        console.print(f"[yellow]plan issue[/yellow]: {msg}")
+    if issues and strict:
+        console.print("[red]plan rejected (--strict)[/red]")
+        raise typer.Exit(1)
     plan = Plan(subtasks=subtasks, decomposed=True, planner_model=planner_name)
-    pid, p = plan_store.save_plan(Path(path).resolve(), task, plan)
+    pid, p = plan_store.save_plan(root, task, plan)
     console.print(f"plan [cyan]{pid}[/cyan] saved ({len(subtasks)} subtasks) → {p}")
     console.print(f"[dim]execute on the local model:[/dim] devagent run --from-plan {pid} -p {path}")
 
@@ -545,6 +555,22 @@ def compliance():
         table.add_row(name, str(len(comp.PROFILES[name])), on)
     console.print(table)
     console.print("[dim]Enable in config: [compliance] profiles = [\"pci-dss\"][/dim]")
+
+
+@app.command(name="install-skill")
+def install_skill():
+    """Install the bundled decompose-execute skill into ~/.claude/skills (single source of truth).
+
+    Re-run after updating the repo's skill so the live copy never drifts."""
+    src = Path(__file__).resolve().parent.parent / "skills" / "decompose-execute" / "SKILL.md"
+    if not src.exists():
+        console.print(f"[red]skill source not found[/red] at {src}")
+        raise typer.Exit(1)
+    dst = Path.home() / ".claude" / "skills" / "decompose-execute" / "SKILL.md"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+    console.print(f"[green]installed[/green] decompose-execute skill → {dst}")
+    console.print("[dim]restart Claude Code (or start a new session) to pick it up.[/dim]")
 
 
 @app.command()
