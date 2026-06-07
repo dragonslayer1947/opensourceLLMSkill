@@ -34,9 +34,17 @@ Working name: `devagent`. Target: production super-apps at Amazon/Flipkart scale
 > write-time pattern enforcement; full ADR lifecycle (draft→accepted→deprecated→superseded);
 > incident knowledge (lessons injected when touched files match). 163 offline tests, ruff-clean.
 >
+> **V5 (autonomous long-horizon) status: BUILT.** Epic decomposition (epic→story→task with
+> pre/postconditions); checkpointed multi-day task-graph runner (resumes across sessions);
+> predictive conflict detection (direct / import-coupling / reservation); cross-team reservation
+> system (TTL'd, typed resources); autonomous architectural proposals behind a human approval gate
+> (approve → promoted to an enforced ADR); decision-trail observability (`devagent trace`, closes
+> gap #10); provider-agnostic org-workflow integration (offline `null` default; `github`/`jira`/
+> `slack` adapters). 201 offline tests, ruff-clean.
+>
 > Remaining before "production": run the executor against a live local llama.cpp server and the
-> 20-task acceptance benchmark. V5 (autonomous long-horizon — epic decomposition, multi-day task
-> graphs, org-workflow integration) follows.
+> 20-task acceptance benchmark; verify the org-workflow providers against live credentials (built
+> and tested via offline fakes).
 
 ---
 
@@ -343,10 +351,10 @@ token savings are *measured*.
 
 ---
 
-### V5 — Autonomous long-horizon
+### V5 — Autonomous long-horizon — BUILT
 > Build features that span weeks, teams, and services without losing coherence.
 
-**Additions:**
+**Additions (all built):**
 - Full epic decomposition: epic → story → task → subtask, each with preconditions/postconditions
 - Multi-day task graphs with checkpointing and resume
 - Predictive conflict detection before execution starts

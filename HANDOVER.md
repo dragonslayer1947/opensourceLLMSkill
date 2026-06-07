@@ -7,9 +7,9 @@ tasks or fixes a gate failure. Everything is verified by a deterministic gate; s
 quality are measured.
 
 - **Repo:** local git at `C:\Users\ADMIN\devagent`, branch `main`. **No remote yet.**
-- **Size:** 41 commits · 47 package modules · 29 test files · **163 offline tests** (ruff-clean,
+- **Size:** 62 package modules · 36 test files · **201 offline tests** (ruff-clean,
   CI matrix ubuntu/windows × py3.11/3.12).
-- **Status:** **V1, V1.5, V2, V3, V4 COMPLETE.** V5 not started.
+- **Status:** **V1, V1.5, V2, V3, V4, V5 COMPLETE.**
 - Verified end-to-end on the claude subscription, including a **self-improvement run** on this
   repo (the reviewer caught a real issue; tests passed; change committed).
 - Shareable onboarding: https://claude.ai/claude-code/onboard/OugmukGx4Q8V
@@ -25,7 +25,7 @@ quality are measured.
 | V2 | Multi-service: dep graph, OpenAPI breaking-change diff, service blast radius, write-locks, budget, index cache | ✅ Done |
 | V3 | Parallel + review: wave scheduler, reviewer agent, test-runner+rollback, specialized agents, test generator | ✅ Done |
 | V4 | Institutional knowledge + compliance: 3-tier retrieval, compliance profiles, migration gate, pattern enforcement, ADR lifecycle, incidents | ✅ Done |
-| V5 | Autonomous long-horizon: epic decomposition, multi-day task graphs, org-workflow integration | ⬜ Not started |
+| V5 | Autonomous long-horizon: epic decomposition, checkpointed multi-day task graphs, predictive conflict detection, cross-team reservations, autonomous arch proposals (approval-gated), decision-trail trace, org-workflow integration | ✅ Done |
 
 ---
 
@@ -57,6 +57,27 @@ quality are measured.
 - ADRs (semantic enforcement + full lifecycle), pattern registry (confidence decay + write-time
   enforcement), service registry + cross-service dependency graph, incident knowledge.
 
+**Autonomous long-horizon (V5)**
+- **Epic decomposition** (`longhorizon/epic.py`): frontier planner turns a goal into an
+  epic→story→task tree with pre/postconditions; immutable plan in `.devagent/epics/<id>/epic.yaml`.
+- **Checkpointed task-graph runner** (`longhorizon/runner.py`): dependency-ordered ready-task
+  frontier, status rolls up to stories/epic, state checkpointed to `state.json` after every change
+  — survives crashes, resumes across days/sessions. Execution is injected (CLI wires `pipeline.run`).
+- **Predictive conflict detection** (`longhorizon/conflict.py`): before execution, flags direct
+  file clashes (block), import-coupling clashes via the blast-radius graph (warn), and tasks
+  touching files under another team's reservation (block).
+- **Cross-team reservation system** (`longhorizon/reservation.py`): TTL'd, owner-keyed reservations
+  on typed resources (`service:` / `table:` / `file:`) under `.devagent/reservations/`.
+- **Autonomous architectural proposals** (`longhorizon/proposal.py`): frontier proposes one ADR;
+  it lands `proposed` and waits at a human gate — `devagent propose --approve` promotes it into an
+  enforced ADR.
+- **Decision-trail observability** (`observability/trace.py`, closes gap #10): every run records
+  routing inputs/verdict, assembled context, rules fired, blast radius, and per-subtask
+  cost/time/model/status to `.devagent/traces/<session>.json`; `devagent trace` renders it.
+- **Org-workflow integration** (`integrations/`): provider-agnostic (`null` default → offline
+  outbox; `github` via `gh`, `jira` via REST, `slack` via webhook). `devagent epic sync` opens one
+  issue per epic/story, idempotently.
+
 **Reporting & safety**
 - SQLite ledger; `cost` (API billing avoided) and `quality` (gate pass + in-envelope + audited
   parity); `audit` / `calibrate` (differential parity vs frontier); per-session token/cost
@@ -64,8 +85,8 @@ quality are measured.
 
 **Gaps closed from the original review:** #1 (escalate on gate failure, not confidence), #2
 (durable resume), #4 (semantic ADR check), #6 (contract conformance), #7 (security in the gate),
-#9 (parallel file-claims + consistency check), #11 (pattern decay), #13 (deterministic-first
-compression).
+#9 (parallel file-claims + consistency check), #10 (decision-trail `devagent trace`), #11 (pattern
+decay), #13 (deterministic-first compression).
 
 ---
 
@@ -88,8 +109,6 @@ compression).
   (OpenAPI specs, client calls, manifests).
 - **#9 semantic conflicts** — parallel waves enforce file-disjointness + a deterministic
   consistency check, but there is **no model-based cross-file semantic conflict check**.
-- **#10 observability** — there's a ledger + `~/.devagent/cli_io/` audit trail, but **no
-  `devagent trace`** decision-trail (classifier inputs, assembled context, rules fired).
 - **#12 multi-repo** — single-repo only; **no workspace** concept spanning repos.
 - **#14 data migrations** — no schema-version/migration for `~/.devagent/tasks.db` or the
   `.devagent/` formats across upgrades.
@@ -97,9 +116,11 @@ compression).
 - **RAG embedding tier** — retrieval is lexical (BM25) + graph; the **vector/embedding tier is a
   pluggable slot**, not implemented (avoids a heavy model dependency).
 
-**V5 (not started)** — epic decomposition (epic→story→task with pre/postconditions), multi-day
-task graphs with checkpointing, predictive conflict detection, org-workflow integration
-(Jira/GitHub PRs/Slack approvals as native primitives).
+**V5 (done) — live-integration follow-ups:** the org-workflow providers are built and wired with
+an offline `null` default; the `github`/`jira`/`slack` backends are exercised only via fakes (no
+remote, no `gh`, no creds in this environment). Point a provider at real credentials to verify
+live. `devagent epic run` wires the runner to `pipeline.run`, so a full multi-day epic run depends
+on the same live-executor prerequisite as the rest of the system.
 
 ---
 

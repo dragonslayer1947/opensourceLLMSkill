@@ -89,6 +89,18 @@ devagent compliance                  # compliance profiles (pci-dss / soc2 / hip
 devagent incidents [--init]          # recorded incidents (lessons injected when files are touched)
 devagent adr set-status <id> <s>     # ADR lifecycle: draft→accepted→deprecated→superseded
 devagent pattern add --enforce-glob "**/routes/*.py" --enforce-regex cursor   # write-time enforcement
+
+# V5 (autonomous long-horizon)
+devagent epic plan "<goal>"          # decompose a goal into an epic→story→task tree (frontier)
+devagent epic show <id>              # the tree with per-node status
+devagent epic conflicts <id>         # predict file / import-coupling / reservation conflicts up front
+devagent epic run <id> [--max-tasks N]  # run ready tasks via the pipeline, checkpointed + resumable
+devagent epic sync <id>              # open one tracker issue per epic/story (null|github|jira|slack)
+devagent reserve service:payments --owner team-a   # cross-team reservation (--release to free)
+devagent reservations                # list active reservations
+devagent propose "<goal>"            # autonomous architecture proposal (human-gated)
+devagent propose --approve P-0001    # approve → promote into an enforced ADR
+devagent trace [<session>]           # decision trail: routing, context, rules, blast, per-task cost/time
 ```
 
 The run pipeline (V4): retrieve (cached **three-tier** index) → **route** → **contract-first**

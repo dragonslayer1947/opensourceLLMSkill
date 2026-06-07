@@ -16,7 +16,7 @@ per-token API billing**. Savings and quality are both measured.
 
 ## Status
 
-- **V1**, **V1.5**, **V2**, **V3**, **V4**: COMPLETE — 163 offline tests, ruff-clean, CI matrix
+- **V1**, **V1.5**, **V2**, **V3**, **V4**, **V5**: COMPLETE — 201 offline tests, ruff-clean, CI matrix
   (ubuntu/windows × py3.11/3.12). Verified end-to-end on the claude subscription (incl. a
   self-improvement run on this repo). No external binaries required.
 - **V5 (autonomous long-horizon)**: next.
@@ -60,15 +60,21 @@ devagent/
 ├── execute/          # executor, edits (search/replace), apply (snapshot/diff/undo),
 │                     #   escalate, contract (OpenAPI-first + conformance)
 ├── validate/         # gate (deterministic checks), safety_rules
-├── knowledge/        # adr, pattern_registry, service_registry
-├── planning/         # blast_radius
+├── knowledge/        # adr, pattern_registry, service_registry, compliance, incidents
+├── planning/         # blast_radius, scheduler (parallel waves)
+├── longhorizon/      # V5: epic (decomposition), runner (checkpointed graph), conflict,
+│                     #   reservation (cross-team), proposal (approval-gated ADRs)
+├── observability/    # V5: trace (decision trail → devagent trace)
+├── integrations/     # V5: org-workflow providers (null/github/jira/slack) + epic sync
 ├── prove/            # audit (differential), calibrate (parity envelope mapping)
 ├── ledger.py         # SQLite: tasks + audits
 └── report.py         # cost savings + quality
 ```
 
 Per-repo config lives under `.devagent/`: `rules.yaml`, `adrs/`, `registry/services/`,
-`patterns.yaml`, `contracts/`, plus runtime `sessions/`, `snapshots/`.
+`patterns.yaml`, `contracts/`, `incidents/`, plus V5 `epics/<id>/` (epic.yaml + state.json +
+sync.json), `reservations/`, `proposals/`, `traces/`, `integrations/outbox.jsonl`, and runtime
+`sessions/`, `snapshots/`.
 
 ## Key concepts
 
@@ -82,10 +88,13 @@ Per-repo config lives under `.devagent/`: `rules.yaml`, `adrs/`, `registry/servi
 
 ## Commands
 
-`run` (flags: `--file --executor --planner --dry-run --yes --audit --flag --contract`),
-`cost`, `quality`, `audit`, `calibrate`, `log`, `undo`, `resume`, `status`, `init`,
-`rules`, `services`/`service`, `adr` (list/show/new/check), `pattern` (list/add/deprecate),
-`contract`.
+`run` (flags: `--file --executor --planner --dry-run --yes --audit --flag --contract --review
+--test --parallel`), `cost`, `quality`, `audit`, `calibrate`, `log`, `undo`, `resume`, `status`,
+`init`, `rules`, `services`/`service`, `adr` (list/show/new/set-status/check), `pattern`
+(list/add/deprecate), `contract`, `contract-diff`, `gen-tests`, `search`, `compliance`,
+`incidents`.
+V5: `epic` (plan/list/show/conflicts/run/sync), `reserve`, `reservations`, `propose`
+(`--list`/`--approve`/`--reject`), `trace`.
 
 ## Conventions
 
@@ -104,7 +113,9 @@ Per-repo config lives under `.devagent/`: `rules.yaml`, `adrs/`, `registry/servi
   agent, test runner with auto-rollback, specialized agents by domain, test generator.
 - **V4** (DONE): three-tier retrieval (exact+BM25+graph), compliance profiles (PCI/SOC2/HIPAA),
   DB migration gate, write-time pattern enforcement, full ADR lifecycle, incident knowledge.
-- **V5** (next): autonomous long-horizon — epic decomposition, multi-day task graphs,
-  org-workflow integration (Jira/GitHub/Slack).
+- **V5** (DONE): autonomous long-horizon — epic decomposition (epic→story→task w/ pre/postconditions),
+  checkpointed multi-day task-graph runner (resumable), predictive conflict detection, cross-team
+  reservations, autonomous architectural proposals (human-gated → enforced ADR), decision-trail
+  `devagent trace` (closes gap #10), provider-agnostic org-workflow integration (null/github/jira/slack).
 
 See `SPEC.md` for the full design and rationale, and `README.md` for user-facing usage.
