@@ -5,12 +5,20 @@
 
 Working name: `devagent`. Target: production super-apps at Amazon/Flipkart scale.
 
-> **V1 status: BUILT.** The kernel is implemented, installed, and tested (37 offline tests,
-> ruff-clean, CI matrix). Frontier work runs through the `claude` CLI subscription (no API
-> billing). Verified end-to-end: decompose → execute → gate → apply → ledger, with cost-savings
-> and quality (audit/calibrate) reporting. Remaining before "production": run the executor
-> against a live local llama.cpp server and run the 20-task acceptance benchmark. See the build
-> order below; everything through Phase 5 exists.
+> **V1 + V1.5 status: BUILT.** The kernel and the knowledge/routing layer are implemented,
+> installed, and tested (79 offline tests, ruff-clean, CI matrix). Frontier work runs through the
+> `claude` CLI subscription (no API billing). Verified end-to-end including the V1.5 flow:
+> retrieve → route (classifier) → contract-first (API tasks) → decompose → blast radius → execute
+> (with ADR + pattern context) → safety rules → gate → escalate → apply → conformance → ledger,
+> with cost-savings and quality (audit/calibrate) reporting.
+>
+> **V1.5 delivered:** safety-rules engine, intra-repo blast radius, service registry, ADR system
+> with semantic enforcement (gap #4), pattern registry with confidence decay (gap #11), routing
+> classifier, and contract-first with conformance diff-back (gap #6).
+>
+> Remaining before "production": run the executor against a live local llama.cpp server, the
+> 20-task acceptance benchmark, and the V2 items below (multi-service graph, cross-service
+> contract validation, write locks).
 
 ---
 

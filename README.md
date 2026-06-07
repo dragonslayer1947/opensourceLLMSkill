@@ -51,6 +51,8 @@ devagent run "<task>"                # decompose → execute locally → gate �
       --dry-run                      #   show intended edits, write nothing
   -y, --yes                          #   skip the keep/rollback confirm
       --audit                        #   after applying, measure parity vs the frontier model
+      --flag <name>                  #   grant a safety-rule flag (repeatable)
+      --contract / --no-contract     #   contract-first for API tasks (default on)
 
 devagent cost                        # cumulative savings (API billing avoided)
 devagent quality                     # gate pass rate, in-envelope rate, audited parity rate
@@ -63,7 +65,18 @@ devagent resume <session-id>         # continue an interrupted session
 devagent status                      # doctor: models, gate tools, git
 devagent init                        # create the default config
 devagent --version
+
+# Knowledge & routing (V1.5)
+devagent rules [--init]              # safety rules (.devagent/rules.yaml): block/warn/require_flag
+devagent services [--init]           # service registry; `service <name>` shows one
+devagent adr list|show|new|check     # ADRs; `check` is a semantic diff check via the local model
+devagent pattern list|add|deprecate  # learned patterns with confidence decay
+devagent contract "<api task>"       # generate + validate an OpenAPI contract (no implementation)
 ```
+
+The run pipeline (V1.5): retrieve → **route** (classifier) → **contract-first** (API tasks) →
+decompose → **blast radius** → per subtask: execute (with ADR + pattern context) → **safety
+rules** → gate → escalate → apply → **conformance** → ledger.
 
 ## How a run works
 
