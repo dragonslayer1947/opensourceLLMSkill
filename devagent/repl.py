@@ -26,8 +26,10 @@ from rich.console import Console
 from . import __version__
 
 SESSION_COMMANDS = {"exit", "quit", "q", "help", "?", "h", "ask", "a", "repo", "cd",
-                    "clear", "flags", "dry", "auto", "review", "test", "parallel"}
+                    "clear", "flags", "dry", "auto", "review", "test", "parallel",
+                    "executor", "planner"}
 TOGGLES = {"dry", "auto", "review", "test", "parallel"}
+ROLE_COMMANDS = {"executor", "planner"}
 
 
 @dataclass
@@ -56,6 +58,7 @@ class Session:
     flags: Flags = field(default_factory=Flags)
     history: list[str] = field(default_factory=list)
     touched: list[str] = field(default_factory=list)
+    roles: dict[str, str] = field(default_factory=dict)  # per-session role overrides
     cfg: object | None = None
     router: object | None = None
 
@@ -87,6 +90,8 @@ def parse_line(line: str) -> Action:
         return Action("flags")
     if cmd in TOGGLES:
         return Action("toggle", arg=cmd)
+    if cmd in ROLE_COMMANDS:
+        return Action("role", arg=cmd, args=([rest] if rest else []))
 
     # Unknown slash command → pass through to the Typer CLI.
     try:
@@ -137,8 +142,10 @@ HELP = """\
   <text>              run it as a coding task (decompose → execute → gate → apply)
   /ask <question>     ask about the repo — read-only, no edits
   /repo <path>        switch the working repo (alias /cd)
-  /flags              show current run flags
+  /flags              show current run flags + role overrides
   /dry /auto /review /test /parallel   toggle a run flag
+  /executor <model>   route execution to a model this session (e.g. /executor claude-cli);
+                      no arg resets to config. /planner <model> likewise.
   /clear              forget this session's history
   /help               this help        /exit  quit (or Ctrl-D)
 
@@ -155,10 +162,12 @@ def _do_task(session: Session, task: str, console: Console) -> None:
     f = session.flags
     try:
         result = pipeline.run(task, str(session.path), dry_run=f.dry, assume_yes=f.auto,
-                              console=console, review=f.review, test=f.test, parallel=f.parallel)
+                              console=console, review=f.review, test=f.test, parallel=f.parallel,
+                              role_overrides=session.roles or None)
     except RoutingError as e:
         console.print(f"[red]model error:[/red] {e}")
-        console.print("[dim]check /status — is the local server up / are keys set?[/dim]")
+        console.print("[dim]no local server? run [bold]/executor claude-cli[/bold] to execute "
+                      "via the Claude CLI (no local model needed), then retry. Or /status.[/dim]")
         return
     session.history.append(task)
     for o in result.outcomes:
@@ -246,11 +255,19 @@ def dispatch(action: Action, session: Session, console: Console) -> bool:
         console.print("[dim]session history cleared[/dim]")
     elif k == "flags":
         f = session.flags
+        roles = ", ".join(f"{r}={m}" for r, m in session.roles.items()) or "config defaults"
         console.print(f"dry={f.dry} auto={f.auto} review={f.review} test={f.test} "
-                      f"parallel={f.parallel}")
+                      f"parallel={f.parallel}  ·  roles: {roles}")
     elif k == "toggle":
         val = toggle_flag(session.flags, action.arg)
         console.print(f"{action.arg} = [bold]{val}[/bold]")
+    elif k == "role":
+        if action.args:
+            session.roles[action.arg] = action.args[0]
+            console.print(f"{action.arg} → [bold]{action.args[0]}[/bold] (this session)")
+        else:
+            session.roles.pop(action.arg, None)
+            console.print(f"{action.arg} reset to config default")
     elif k == "passthrough":
         _do_passthrough(action.args, console)
     return True

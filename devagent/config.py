@@ -62,9 +62,9 @@ timeout_s = 400
 
 # ── Role -> ordered model chain (first = primary, rest = fallback). ──
 [roles]
-classifier = ["qwen-local"]
-executor   = ["qwen-local"]
-compressor = ["qwen-local"]
+classifier = ["qwen-local", "claude-cli"]
+executor   = ["qwen-local", "claude-cli"]   # local primary; CLI fallback if no local server is up
+compressor = ["qwen-local", "claude-cli"]
 planner    = ["claude-cli-opus", "claude-cli", "qwen-local"]   # decomposition; CLI subscription
 reviewer   = ["claude-cli", "qwen-local"]
 

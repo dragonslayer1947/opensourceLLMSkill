@@ -6,6 +6,7 @@ V1 indexes Python. Other languages fall back to filename/keyword matching."""
 from __future__ import annotations
 
 import ast
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,22 +26,47 @@ def _content_terms(text: str) -> set[str]:
                 break
     return terms
 
-SKIP_DIRS = {".git", ".devagent", "__pycache__", ".venv", "venv", "node_modules",
-             ".mypy_cache", ".ruff_cache", ".pytest_cache", "dist", "build", ".idea"}
+SKIP_DIRS = {".git", ".hg", ".svn", ".devagent", "__pycache__", "__pypackages__",
+             "node_modules", ".mypy_cache", ".ruff_cache", ".pytest_cache", ".tox", ".nox",
+             ".eggs", ".cache", "dist", "build", ".idea", ".vscode", ".next", ".nuxt",
+             ".gradle", ".terraform", "vendor", "htmlcov", "site-packages"}
 
 SOURCE_SUFFIXES = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb", ".rs"}
 
 
+def _skip_dir(name: str) -> bool:
+    """A directory we must never descend into. Catches the usual junk, and crucially any
+    virtualenv regardless of its name — `.venv`, `.venv-asr`, `venv311`, `env` — plus the
+    `site-packages` / metadata dirs inside one. (A definitive `pyvenv.cfg` marker is handled
+    separately by pruning during the walk.)"""
+    low = name.lower()
+    if name in SKIP_DIRS:
+        return True
+    if low.startswith((".venv", "venv")):
+        return True
+    return low.endswith((".egg-info", ".dist-info"))
+
+
 def source_paths(root: Path):
-    """Yield (path, rel) for every indexable source file (shared by the index and its cache)."""
+    """Yield (path, rel) for every indexable source file (shared by the index and its cache).
+
+    Uses os.walk with in-place pruning so we never even descend into a virtualenv or
+    node_modules — essential on real repos (a venv alone can hold 50k+ files)."""
     root = Path(root).resolve()
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
+    results: list[tuple[Path, str]] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # A directory containing pyvenv.cfg IS a virtualenv root — don't descend into it.
+        if "pyvenv.cfg" in filenames:
+            dirnames[:] = []
             continue
-        if any(part in SKIP_DIRS for part in path.parts):
-            continue
-        if path.suffix in SOURCE_SUFFIXES:
-            yield path, path.relative_to(root).as_posix()
+        dirnames[:] = [d for d in dirnames if not _skip_dir(d)]
+        base = Path(dirpath)
+        for fn in filenames:
+            if Path(fn).suffix in SOURCE_SUFFIXES:
+                p = base / fn
+                results.append((p, p.relative_to(root).as_posix()))
+    results.sort(key=lambda t: t[1])
+    yield from results
 
 
 @dataclass

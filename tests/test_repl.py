@@ -51,6 +51,16 @@ def test_toggles():
         assert a.kind == "toggle" and a.arg == name
 
 
+def test_role_command_with_model():
+    a = parse_line("/executor claude-cli")
+    assert a.kind == "role" and a.arg == "executor" and a.args == ["claude-cli"]
+
+
+def test_role_command_reset_has_no_args():
+    a = parse_line("/planner")
+    assert a.kind == "role" and a.arg == "planner" and a.args == []
+
+
 def test_unknown_slash_is_passthrough_tokenized():
     a = parse_line('/epic plan "build checkout"')
     assert a.kind == "passthrough"
@@ -92,6 +102,14 @@ def test_dispatch_toggle_mutates_session(tmp_path):
     s = _session(tmp_path)
     dispatch(Action("toggle", arg="parallel"), s, _console())
     assert s.flags.parallel is True
+
+
+def test_dispatch_role_sets_and_resets(tmp_path):
+    s = _session(tmp_path)
+    dispatch(Action("role", arg="executor", args=["claude-cli"]), s, _console())
+    assert s.roles == {"executor": "claude-cli"}
+    dispatch(Action("role", arg="executor", args=[]), s, _console())
+    assert s.roles == {}
 
 
 def test_dispatch_clear_empties_history(tmp_path):
