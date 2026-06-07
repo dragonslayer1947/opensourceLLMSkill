@@ -84,6 +84,10 @@ max_context_tokens = 12000             # ceiling of context fed to the local exe
 max_file_lines     = 400               # window files larger than this (skeleton + focus)
 max_subtask_files  = 3                 # a subtask touching more files must be decomposed
 
+[limits]
+blast_radius_warn  = 10                # warn when a change affects more than this many files
+blast_radius_block = 40                # confirm before proceeding above this (unless --yes)
+
 [gate]
 run_types    = true                    # mypy
 run_lint     = true                    # ruff
@@ -137,6 +141,7 @@ class Config:
     reporting: dict
     pricing: dict[str, Pricing]
     db_path: Path
+    limits: dict = field(default_factory=dict)
     raw: dict = field(default_factory=dict)
 
     def role_chain(self, role: str) -> list[str]:
@@ -193,5 +198,6 @@ def load_config() -> Config:
         reporting=data.get("reporting", {}),
         pricing=pricing,
         db_path=db_path,
+        limits=data.get("limits", {}),
         raw=data,
     )

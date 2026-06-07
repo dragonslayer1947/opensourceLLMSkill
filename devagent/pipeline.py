@@ -24,6 +24,7 @@ from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .models.registry import Registry
 from .models.router import Router
+from .planning import blast_radius
 from .prove.audit import differential_audit, persist as persist_audit
 from .validate import safety_rules
 from .validate.gate import run_gate
@@ -198,6 +199,24 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                       f"(planner: {plan.planner_model})")
     else:
         console.print("  in-envelope → [bold]direct[/bold] (1 subtask, no frontier call, ~$0)")
+
+    # Blast radius — impact analysis before any execution.
+    planned = sorted(file_set | {f for st in plan.subtasks for f in st.target_files}
+                     | set(bundle.candidate_files[:3]))
+    if planned:
+        br = blast_radius.analyze(
+            index, planned,
+            warn=int(config.limits.get("blast_radius_warn", 10)),
+            block=int(config.limits.get("blast_radius_block", 40)),
+        )
+        color = {"low": "green", "medium": "yellow", "high": "red"}[br.level]
+        console.print(f"[{color}]{br.render()}[/{color}]")
+        if br.level == "high" and not assume_yes and not dry_run:
+            from rich.prompt import Confirm
+            if not Confirm.ask("High blast radius — proceed?", default=False):
+                result.status = "aborted"
+                console.print("[yellow]aborted before execution[/yellow]")
+                return result
 
     for st in plan.subtasks:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
