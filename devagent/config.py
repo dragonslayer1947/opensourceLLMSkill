@@ -21,11 +21,13 @@ DEFAULT_CONFIG_TOML = """\
 # ── Models: local or cloud. Two protocols cover almost everything. ──
 [models.qwen-local]
 protocol  = "openai-compat"            # any OpenAI-compatible local server
-base_url  = "http://localhost:8080/v1"
+base_url  = "http://localhost:8080/v1" # llama.cpp default is 8080; check your --port!
 model_id  = "qwen3.6-27b"              # Qwen3.6 27B, 128K context — strong on well-scoped subtasks
 tier      = "local"                    # local => ~$0
 timeout_s = 180
 api_key_env = ""                       # local servers need no key
+disable_thinking = true                # Qwen3/reasoning models: turn off the thinking phase, else
+                                       #   `content` comes back empty (answer lands in reasoning_content)
 # Getting a local executor running (the model that does the bulk of the work):
 #   • llama.cpp:  llama-server -m qwen3-27b.gguf -c 8192 --port 8080   → base_url .../v1 above
 #   • Ollama (easiest on Windows):  `ollama serve` then `ollama pull qwen2.5-coder:7b`,
@@ -141,6 +143,7 @@ class ModelSpec:
     timeout_s: int = 180
     command: str = ""        # for protocol = "cli": the executable to spawn
     mode: str = "claude"     # for protocol = "cli": adapter ("claude" | "generic")
+    extra_body: dict = field(default_factory=dict)  # extra request fields (openai-compat)
 
     @property
     def api_key(self) -> str | None:
@@ -195,6 +198,14 @@ def load_config() -> Config:
 
     models: dict[str, ModelSpec] = {}
     for name, m in data.get("models", {}).items():
+        # Reasoning models (Qwen3, etc.) default to a thinking phase that fills
+        # `reasoning_content` and can leave `content` empty — useless for the executor.
+        # `disable_thinking = true` turns it off via chat_template_kwargs.
+        extra_body = dict(m.get("extra_body", {}) or {})
+        if m.get("disable_thinking"):
+            ctk = dict(extra_body.get("chat_template_kwargs", {}))
+            ctk["enable_thinking"] = False
+            extra_body["chat_template_kwargs"] = ctk
         models[name] = ModelSpec(
             name=name,
             protocol=m["protocol"],
@@ -205,6 +216,7 @@ def load_config() -> Config:
             timeout_s=int(m.get("timeout_s", 180)),
             command=m.get("command", ""),
             mode=m.get("mode", "claude"),
+            extra_body=extra_body,
         )
 
     pricing = dict(_DEFAULT_PRICING)

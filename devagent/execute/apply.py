@@ -43,9 +43,9 @@ def prepare(root: Path, edits: list[Edit]) -> PreparedEdits:
     for edit in edits:
         result, old, new = apply_edit(root, edit)
         if result.ok and new is not None:
-            prepared.changes.append(FileChange(edit.path, old, new, result.reason))
+            prepared.changes.append(FileChange(result.path, old, new, result.reason))
         else:
-            prepared.failures.append((edit.path, result.reason))
+            prepared.failures.append((result.path, result.reason))
     return prepared
 
 

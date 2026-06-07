@@ -22,6 +22,7 @@ class Registry:
             return OpenAICompatClient(
                 spec.name, spec.model_id, spec.tier, defaults,
                 base_url=spec.base_url, api_key=spec.api_key, timeout_s=spec.timeout_s,
+                extra_body=spec.extra_body,
             )
         if spec.protocol == "anthropic":
             from .anthropic_client import AnthropicClient
