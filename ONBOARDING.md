@@ -16,10 +16,10 @@ per-token API billing**. Savings and quality are both measured.
 
 ## Status
 
-- **V1**, **V1.5**, **V2**, **V3**: COMPLETE — 135 offline tests, ruff-clean, CI matrix
-  (ubuntu/windows × py3.11/3.12). Verified end-to-end on the claude subscription. No external
-  binaries required.
-- **V4 (semantic RAG, write-time pattern enforcement, compliance)**: next.
+- **V1**, **V1.5**, **V2**, **V3**, **V4**: COMPLETE — 163 offline tests, ruff-clean, CI matrix
+  (ubuntu/windows × py3.11/3.12). Verified end-to-end on the claude subscription (incl. a
+  self-improvement run on this repo). No external binaries required.
+- **V5 (autonomous long-horizon)**: next.
 - Repo: local git at `C:\Users\ADMIN\devagent` on `main`. **No remote yet** — to publish:
   `git remote add origin <url> && git push -u origin main`.
 
@@ -102,7 +102,9 @@ Per-repo config lives under `.devagent/`: `rules.yaml`, `adrs/`, `registry/servi
   repo-graph caching, `services --check` contract-validation pipeline.
 - **V3** (DONE): parallel execution (file-disjoint waves on the write-lock foundation), reviewer
   agent, test runner with auto-rollback, specialized agents by domain, test generator.
-- **V4** (next): semantic RAG, pattern enforcement at write time, compliance rule sets.
-- **V5**: autonomous long-horizon (epic decomposition, org-workflow integration).
+- **V4** (DONE): three-tier retrieval (exact+BM25+graph), compliance profiles (PCI/SOC2/HIPAA),
+  DB migration gate, write-time pattern enforcement, full ADR lifecycle, incident knowledge.
+- **V5** (next): autonomous long-horizon — epic decomposition, multi-day task graphs,
+  org-workflow integration (Jira/GitHub/Slack).
 
 See `SPEC.md` for the full design and rationale, and `README.md` for user-facing usage.

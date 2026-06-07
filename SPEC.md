@@ -28,9 +28,15 @@ Working name: `devagent`. Target: production super-apps at Amazon/Flipkart scale
 > specialized agents by domain (migration/infra/frontend/api); test generator. Session resume
 > (V1) and cost cap (V2) already present. 135 offline tests, ruff-clean.
 >
+> **V4 (institutional knowledge + compliance) status: BUILT.** Three-tier retrieval (exact +
+> BM25 + import-graph — dependency-free, embedding tier pluggable); compliance constraint
+> profiles (PCI-DSS/SOC2/HIPAA); DB migration safety gate (reversibility + destructive-op flag);
+> write-time pattern enforcement; full ADR lifecycle (draft→accepted→deprecated→superseded);
+> incident knowledge (lessons injected when touched files match). 163 offline tests, ruff-clean.
+>
 > Remaining before "production": run the executor against a live local llama.cpp server and the
-> 20-task acceptance benchmark. V4 (semantic RAG, pattern enforcement at write time, compliance
-> rule sets) and V5 (autonomous long-horizon) follow.
+> 20-task acceptance benchmark. V5 (autonomous long-horizon — epic decomposition, multi-day task
+> graphs, org-workflow integration) follows.
 
 ---
 

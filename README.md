@@ -82,13 +82,21 @@ devagent contract-diff OLD NEW       # OpenAPI breaking-change diff (pure Python
 
 # V3
 devagent gen-tests <file>            # draft pytest tests for a source file (local model)
+
+# V4 (institutional knowledge + compliance)
+devagent search "<query>"            # three-tier retrieval (exact + BM25 + graph)
+devagent compliance                  # compliance profiles (pci-dss / soc2 / hipaa)
+devagent incidents [--init]          # recorded incidents (lessons injected when files are touched)
+devagent adr set-status <id> <s>     # ADR lifecycle: draft→accepted→deprecated→superseded
+devagent pattern add --enforce-glob "**/routes/*.py" --enforce-regex cursor   # write-time enforcement
 ```
 
-The run pipeline (V3): retrieve (cached index) → **route** (classifier) → **contract-first**
-(API tasks) → decompose → **blast radius** (file + service) → **write-locks** → **parallel
-waves** (file-disjoint) → per subtask: **specialized** domain guidance → execute (ADR + pattern
-context) → **safety rules** → gate → escalate → **reviewer** → apply → **conformance** →
-**test runner** (auto-rollback) → ledger. A per-session **token/cost budget** can hard-stop it.
+The run pipeline (V4): retrieve (cached **three-tier** index) → **route** → **contract-first**
+→ decompose → **blast radius** (file + service) → **incident lessons** → **write-locks** →
+**parallel waves** → per subtask: **specialized** guidance → execute (ADR + pattern + incident
+context) → **safety rules + compliance + migration gate + pattern enforcement** → gate →
+escalate → **reviewer** → apply → **conformance** → **test runner** (auto-rollback) → ledger.
+A per-session **token/cost budget** can hard-stop it.
 
 ## How a run works
 
