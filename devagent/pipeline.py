@@ -25,6 +25,7 @@ from .execute.executor import execute_subtask
 from .models.registry import Registry
 from .models.router import Router
 from .prove.audit import differential_audit, persist as persist_audit
+from .validate import safety_rules
 from .validate.gate import run_gate
 
 
@@ -86,6 +87,7 @@ def _run_subtask(
     subtask: Subtask, task_root: Path, config: Config, router: Router,
     index, console: Console, result: RunResult, dry_run: bool,
     files: set[str] | None = None,
+    rules: list | None = None, flags: set[str] | None = None,
 ) -> SubtaskOutcome:
     env = config.envelope
     bundle = retrieve(
@@ -106,6 +108,16 @@ def _run_subtask(
         console.print(f"  [red]no applicable edits[/red] for {subtask.id} "
                       f"({'; '.join(out.notes) or 'parse/match failure'})")
         return SubtaskOutcome(subtask.id, subtask.description, [], {}, False, "no_edits")
+
+    # Safety rules — evaluated before any write.
+    violations = safety_rules.evaluate(prepared.changes, rules or [], flags or set())
+    for v in violations:
+        tag = "[red]BLOCK[/red]" if v.severity == "block" else "[yellow]warn[/yellow]"
+        console.print(f"  {tag} [{v.rule_id}] {v.path}: {v.message}")
+    if any(v.severity == "block" for v in violations) and not dry_run:
+        console.print(f"  [red]subtask {subtask.id} blocked by safety rules[/red] (not written)")
+        return SubtaskOutcome(subtask.id, subtask.description,
+                              [c.path for c in prepared.changes], {}, False, "blocked")
 
     if dry_run:
         ap.render_diff(prepared.changes, console)
@@ -145,12 +157,14 @@ def _run_subtask(
 
 def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Console,
         files: list[str] | None = None, role_overrides: dict[str, str] | None = None,
-        audit: bool = False) -> RunResult:
+        audit: bool = False, flags: set[str] | None = None) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
     task_root = Path(path).resolve()
     file_set = set(files or [])
+    flags = flags or set()
+    rules = safety_rules.load_rules(task_root)
     registry = Registry(config)
     router = Router(registry)
 
@@ -187,7 +201,8 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
 
     for st in plan.subtasks:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
-        outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run, file_set)
+        outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
+                               file_set, rules, flags)
         result.outcomes.append(outcome)
         _save_session(task_root, result, task)
 
@@ -248,11 +263,13 @@ def resume_session(session_id: str, path: str, *, assume_yes: bool, console: Con
     registry = Registry(config)
     router = Router(registry)
     index = build_index(task_root)
+    rules = safety_rules.load_rules(task_root)
     result = RunResult(session_id=session_id, plan=Plan(subtasks, True, None))
 
     for st in remaining:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
-        outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run=False)
+        outcome = _run_subtask(st, task_root, config, router, index, console, result,
+                               dry_run=False, rules=rules, flags=set())
         result.outcomes.append(outcome)
         # merge into completed set as we go (durable checkpoint)
         if outcome.status == "applied":

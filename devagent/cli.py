@@ -60,6 +60,7 @@ def run(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show intended edits, write nothing."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the keep/rollback confirm."),
     audit: bool = typer.Option(False, "--audit", help="After applying, measure parity vs the frontier model (uses the frontier model)."),
+    flag: list[str] = typer.Option(None, "--flag", help="Grant a safety-rule flag (e.g. security-review). Repeatable."),
 ):
     """Decompose a task into in-envelope subtasks, execute locally, gate, and apply."""
     overrides: dict[str, str] = {}
@@ -69,7 +70,8 @@ def run(
         overrides["planner"] = planner
     try:
         result = pipeline.run(task, path, dry_run=dry_run, assume_yes=yes, console=console,
-                              files=list(file or []), role_overrides=overrides, audit=audit)
+                              files=list(file or []), role_overrides=overrides, audit=audit,
+                              flags=set(flag or []))
     except RoutingError as e:
         console.print(f"\n[red]model error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")
@@ -209,6 +211,32 @@ def init():
     path = ensure_config()
     console.print(f"config ready at [bold]{path}[/bold]")
     console.print("Edit it to add models, change role chains, or adjust the parity envelope.")
+
+
+@app.command()
+def rules(
+    path: str = typer.Option(".", "--path", "-p"),
+    init: bool = typer.Option(False, "--init", help="Write a sample .devagent/rules.yaml and exit."),
+):
+    """Show the safety rules in effect (or --init to scaffold them)."""
+    from .validate import safety_rules
+    root = Path(path).resolve()
+    if init:
+        p = safety_rules.write_sample(root)
+        console.print(f"sample rules at [bold]{p}[/bold]")
+        return
+    loaded = safety_rules.load_rules(root)
+    if not loaded:
+        console.print(f"[dim]no rules at {root / safety_rules.RULES_FILE} — "
+                      f"run `devagent rules --init`[/dim]")
+        return
+    table = Table(title="safety rules", show_header=True, header_style="bold")
+    for c in ("id", "action", "match", "flag"):
+        table.add_column(c)
+    for r in loaded:
+        match = r.path_glob or (f"/{r.content_regex}/" if r.content_regex else "")
+        table.add_row(r.id, r.action, match[:40], r.flag or "")
+    console.print(table)
 
 
 @app.command()
