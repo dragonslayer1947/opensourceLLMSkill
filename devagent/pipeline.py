@@ -294,7 +294,8 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         files: list[str] | None = None, role_overrides: dict[str, str] | None = None,
         audit: bool = False, flags: set[str] | None = None,
         contract: bool = True, review: bool = False, test: bool = False,
-        parallel: bool = False, from_plan: str | None = None) -> RunResult:
+        parallel: bool = False, from_plan: str | None = None,
+        host_tokens: tuple[int, int, str] | None = None) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
@@ -567,6 +568,18 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         else:
             console.print("[green]contract conformance: implementation matches the spec[/green]")
 
+    # Host orchestration accounting (gap #5): if the host (e.g. Claude Code driving the skill)
+    # reports its own planning/verifying tokens, record them as a `host`-tier call so cost reports
+    # can show the honest end-to-end figure. Host work is NOT counted as savings (incurred either
+    # way) — see report.summary / billing.
+    if host_tokens:
+        h_in, h_out, h_model = host_tokens
+        h_model = h_model or config.reporting.get("counterfactual_model", "sonnet")
+        h_cost = report.cost_of(config.pricing, h_model, h_in, h_out)
+        result.calls.append(Call(h_model, "host", int(h_in), int(h_out), h_cost))
+        console.print(f"[dim]host orchestration recorded: {h_in + h_out} tokens "
+                      f"≈ ${h_cost:.4f} (not counted as savings)[/dim]")
+
     _record(config, task, result)
     _save_session(task_root, result, task)
 
@@ -744,9 +757,10 @@ def resume_session(session_id: str, path: str, *, assume_yes: bool, console: Con
 
 def _record(config: Config, task: str, result: RunResult) -> None:
     local_ref = config.reporting.get("local_counterfactual_price", "sonnet")
-    tin = sum(c.tin for c in result.calls)
-    tout = sum(c.tout for c in result.calls)
+    tin = sum(c.tin for c in result.calls if c.tier != "host")
+    tout = sum(c.tout for c in result.calls if c.tier != "host")
     actual, counter = report.billing(result.calls, config.pricing, local_ref)
+    host_cost = sum(c.cost_usd for c in result.calls if c.tier == "host")
     files = sorted({f for o in result.outcomes for f in o.changed_files})
     gate_summary: dict = {}
     for o in result.outcomes:
@@ -767,4 +781,5 @@ def _record(config: Config, task: str, result: RunResult) -> None:
         "n_subtasks": len(result.plan.subtasks),
         "audit_result": None,
         "status": result.status,
+        "host_cost": round(host_cost, 6),
     })

@@ -71,6 +71,9 @@ def run(
     review: bool = typer.Option(False, "--review", help="Reviewer agent checks each diff; a HIGH finding rolls it back."),
     test: bool = typer.Option(False, "--test", help="Impact gate: after applying, run the tests covering the change (blast radius); auto-rollback on failure."),
     parallel: bool = typer.Option(False, "--parallel", help="Run independent subtasks concurrently in dependency-ordered, file-disjoint waves."),
+    host_in: int = typer.Option(0, "--host-in", help="Host (orchestrator) input tokens spent on THIS task — for honest end-to-end cost (gap #5)."),
+    host_out: int = typer.Option(0, "--host-out", help="Host (orchestrator) output tokens spent on THIS task."),
+    host_model: str = typer.Option(None, "--host-model", help="Host model for pricing the orchestration tokens (default: reporting.counterfactual_model)."),
 ):
     """Decompose a task into in-envelope subtasks, execute locally, gate, and apply.
 
@@ -83,11 +86,12 @@ def run(
         overrides["executor"] = executor
     if planner:
         overrides["planner"] = planner
+    host_tokens = (host_in, host_out, host_model) if (host_in or host_out) else None
     try:
         result = pipeline.run(task or "", path, dry_run=dry_run, assume_yes=yes, console=console,
                               files=list(file or []), role_overrides=overrides, audit=audit,
                               flags=set(flag or []), contract=contract, review=review, test=test,
-                              parallel=parallel, from_plan=from_plan)
+                              parallel=parallel, from_plan=from_plan, host_tokens=host_tokens)
     except (RoutingError, FileNotFoundError, ValueError) as e:
         console.print(f"\n[red]error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")
@@ -98,16 +102,21 @@ def run(
 def _run_summary(result) -> None:
     cfg = load_config()
     local_ref = cfg.reporting.get("local_counterfactual_price", "sonnet")
-    actual, counter = report.billing(result.calls, cfg.pricing, local_ref)
-    tin = sum(c.tin for c in result.calls)
-    tout = sum(c.tout for c in result.calls)
-    local_tok = sum(c.tin + c.tout for c in result.calls if c.tier == "local")
-    share = (local_tok / (tin + tout) * 100) if (tin + tout) else 100.0
+    s = report.summary(result.calls, cfg.pricing, local_ref)
 
     console.print(f"\n[bold]Session {result.session_id}[/bold] — status: {result.status}")
-    console.print(f"  tokens: {tin + tout}  ({share:.0f}% local)")
-    console.print(f"  cost:  ${actual:.4f} actual  vs  ${counter:.4f} all-frontier (est.)  "
-                  f"[green]→ saved ${counter - actual:.4f}[/green]")
+    console.print(f"  execution tokens: {s['exec_tokens']}  ({s['pct_local_exec']:.0f}% local)")
+    console.print(f"  cost:  ${s['actual']:.4f} actual  vs  ${s['counterfactual']:.4f} "
+                  f"all-frontier execution (est.)  [green]→ saved ${s['savings']:.4f}[/green]")
+    if s["host_measured"]:
+        # Honest end-to-end: the host's own orchestration is real and not part of the savings.
+        console.print(f"  [dim]+ host orchestration: {s['host_tokens']} tokens "
+                      f"≈ ${s['host_cost']:.4f} (not saved) → net end-to-end "
+                      f"${s['actual'] + s['host_cost']:.4f}, {s['pct_local_end2end']:.0f}% local "
+                      f"end-to-end[/dim]")
+    elif s["pct_local_exec"] >= 99.9 and s["exec_tokens"]:
+        console.print("  [dim]savings are execution-only; host orchestration tokens not measured "
+                      "(pass --host-in/--host-out to include them)[/dim]")
     applied = [o for o in result.outcomes if o.status == "applied"]
     failed = [o for o in result.outcomes if o.status == "gate_failed"]
     console.print(f"  subtasks: {len(applied)} applied, {len(failed)} gate-failed, "

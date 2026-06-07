@@ -125,11 +125,15 @@ test, add a subtask that writes one. Half-built or wrong = a new subtask, not "d
 
 ## Step 7 — Report savings (MANDATORY, and honestly)
 Report:
-1. the per-run line — **`saved $X (Y% local)`** — and cumulative `devagent cost -p <repo>`.
-2. **The honest caveat:** that figure counts only work routed through `devagent` (the local
-   execution vs. an all-frontier counterfactual). **Your own planning/orchestration tokens as the
-   host are real and are NOT included**, and the savings are only meaningful if `Y% local` is high.
-   If `Y% local` is 0, say plainly that nothing ran locally (local model down) → no savings.
+1. the per-run line — **`saved $X (Y% local execution)`** — and cumulative `devagent cost -p <repo>`.
+2. **The honest caveat (now measurable):** that figure is **execution-only** — local execution vs.
+   an all-frontier-execution counterfactual. **Your own planning/orchestration tokens as the host
+   are real and are NOT part of the savings** (you'd spend them either way). To make the number
+   honest end-to-end, pass your own token spend for the task:
+   `devagent run … --host-in <in> --host-out <out>` — the engine then reports net end-to-end cost
+   and a true **`% local end-to-end`**. If you can't estimate them, say so. The savings are only
+   meaningful if `% local execution` is high; if it's 0, nothing ran locally (local model down) →
+   no savings.
 
 ## Hard rules
 - **ALWAYS decompose (hard)** an in-scope task — never skip planning because it "seems simple

@@ -68,6 +68,10 @@ def _connect(db_path: Path):
 def init_db(db_path: Path) -> None:
     with _connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        # Additive migration: host-orchestration cost (gap #5). Old DBs lack the column.
+        have = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        if "host_cost" not in have:
+            conn.execute("ALTER TABLE tasks ADD COLUMN host_cost REAL DEFAULT 0")
 
 
 def log_task(db_path: Path, record: dict) -> int:
@@ -76,7 +80,7 @@ def log_task(db_path: Path, record: dict) -> int:
     cols = [
         "created_at", "session_id", "task", "files", "models_used", "tokens_in",
         "tokens_out", "actual_cost", "counterfactual_cost", "savings", "quality_gate",
-        "in_envelope", "decomposed", "n_subtasks", "audit_result", "status",
+        "in_envelope", "decomposed", "n_subtasks", "audit_result", "status", "host_cost",
     ]
     for jsonish in ("files", "models_used", "quality_gate", "audit_result"):
         if isinstance(record.get(jsonish), (list, dict)):
@@ -153,6 +157,7 @@ def totals(db_path: Path) -> dict:
                 COALESCE(SUM(actual_cost), 0)         AS actual,
                 COALESCE(SUM(counterfactual_cost), 0) AS counterfactual,
                 COALESCE(SUM(savings), 0)             AS savings,
+                COALESCE(SUM(host_cost), 0)           AS host_cost,
                 COALESCE(SUM(in_envelope), 0)         AS in_envelope,
                 COALESCE(SUM(CASE WHEN status='applied' THEN 1 ELSE 0 END), 0) AS applied
             FROM tasks

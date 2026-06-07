@@ -51,6 +51,8 @@ def billing(calls, pricing: dict[str, Pricing], local_ref: str = "sonnet") -> tu
     actual = 0.0
     counter = 0.0
     for c in calls:
+        if c.tier == "host":
+            continue  # host orchestration is incurred in BOTH worlds — see summary() / gap #5
         if c.tier == "cli":
             counter += c.cost_usd
         elif c.tier == "local":
@@ -62,6 +64,34 @@ def billing(calls, pricing: dict[str, Pricing], local_ref: str = "sonnet") -> tu
     return actual, counter
 
 
+def summary(calls, pricing: dict[str, Pricing], local_ref: str = "sonnet") -> dict:
+    """Honest end-to-end accounting (gap #5).
+
+    The savings number is EXECUTION-ONLY: it's what frontier *execution* would have billed minus
+    what we actually paid. The host model's own orchestration (decomposing, reading diffs,
+    verifying) is real frontier work — but it happens in the all-frontier world too, so it nets
+    out of *savings*. We surface it separately as `host_*` and compute `pct_local` two ways:
+    over execution tokens, and end-to-end including host orchestration."""
+    actual, counter = billing(calls, pricing, local_ref)
+    exec_tokens = sum(c.tin + c.tout for c in calls if c.tier != "host")
+    local_tokens = sum(c.tin + c.tout for c in calls if c.tier == "local")
+    host_tokens = sum(c.tin + c.tout for c in calls if c.tier == "host")
+    host_cost = sum(c.cost_usd for c in calls if c.tier == "host")
+    total_tokens = exec_tokens + host_tokens
+    return {
+        "actual": actual,
+        "counterfactual": counter,
+        "savings": counter - actual,
+        "exec_tokens": exec_tokens,
+        "local_tokens": local_tokens,
+        "host_tokens": host_tokens,
+        "host_cost": host_cost,
+        "host_measured": host_tokens > 0,
+        "pct_local_exec": (local_tokens / exec_tokens * 100) if exec_tokens else 100.0,
+        "pct_local_end2end": (local_tokens / total_tokens * 100) if total_tokens else 100.0,
+    }
+
+
 def show_cost(config: Config, console: Console) -> None:
     t = ledger.totals(config.db_path)
     if not t or t.get("n", 0) == 0:
@@ -70,18 +100,25 @@ def show_cost(config: Config, console: Console) -> None:
     actual = t["actual"]
     counter = t["counterfactual"]
     savings = t["savings"]
+    host_cost = t.get("host_cost", 0) or 0.0
     pct = (savings / counter * 100) if counter else 0.0
 
     table = Table(title="Cost savings (cumulative)", show_header=True, header_style="bold")
     table.add_column("Metric")
     table.add_column("Value", justify="right")
     table.add_row("Tasks", str(t["n"]))
-    table.add_row("Actual cost", f"${actual:.4f}")
-    table.add_row("If all-frontier (est.)", f"${counter:.4f}")
-    table.add_row("[green]Saved[/green]", f"[green]${savings:.4f}  ({pct:.1f}%)[/green]")
+    table.add_row("Actual cost (execution)", f"${actual:.4f}")
+    table.add_row("If all-frontier execution (est.)", f"${counter:.4f}")
+    table.add_row("[green]Saved on execution[/green]", f"[green]${savings:.4f}  ({pct:.1f}%)[/green]")
+    if host_cost:
+        # Host orchestration is real and is NOT part of the savings above (you pay it either way).
+        table.add_row("Host orchestration (not saved)", f"${host_cost:.4f}")
+        table.add_row("[bold]Net end-to-end cost[/bold]", f"[bold]${actual + host_cost:.4f}[/bold]")
     console.print(table)
-    console.print(r"[dim]Counterfactual is an estimate: same pipeline with the frontier model "
-                  r"as executor. Adjust prices in \[pricing] in your config.[/dim]")
+    console.print(r"[dim]Savings are EXECUTION-ONLY: frontier execution avoided vs. actual. The "
+                  r"host model's own planning/verifying tokens are real and are NOT counted as "
+                  r"savings — record them with `--host-in/--host-out` on a run to see the net "
+                  r"end-to-end figure. Counterfactual is an estimate; adjust \[pricing] in config.[/dim]")
 
 
 def show_quality(config: Config, console: Console) -> None:
