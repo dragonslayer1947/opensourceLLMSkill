@@ -82,3 +82,26 @@ def test_plan_cache_avoids_second_call(tmp_repo):
                       use_cache=True)
     assert r2.roles_called == []
     assert plan2.planner_model == "(cached)" and len(plan2.subtasks) == 2
+
+
+def test_plan_cache_invalidates_when_files_change(tmp_repo):
+    from devagent.context.retrieve import retrieve
+    q = "improve the Calc add and total methods"
+    idx = build_index(tmp_repo)
+    b = retrieve(idx, q, max_context_tokens=12000, max_file_lines=400)
+    assert "app/calc.py" in b.candidate_files       # the changed file IS a candidate
+    r1 = RecordingRouter({"planner_local": _GOOD})
+    decompose(q, idx, b, r1, max_subtask_files=3, force_decompose=True, use_cache=True)
+    assert r1.roles_called == ["planner_local"]
+
+    # edit calc.py (keep its symbols so it's still the same candidate) -> content fingerprint
+    # changes -> cache MISS (#4): the stale plan is not reused.
+    (tmp_repo / "app" / "calc.py").write_text(
+        "from typing import List\n\n\nclass Calc:\n    def add(self, a, b):\n"
+        "        return a + b + 0  # edited\n\n    def total(self, xs: List[int]) -> int:\n"
+        "        return sum(xs)\n", encoding="utf-8")
+    idx2 = build_index(tmp_repo)
+    b2 = retrieve(idx2, q, max_context_tokens=12000, max_file_lines=400)
+    r2 = RecordingRouter({"planner_local": _GOOD})
+    decompose(q, idx2, b2, r2, max_subtask_files=3, force_decompose=True, use_cache=True)
+    assert r2.roles_called == ["planner_local"]   # not served from the stale plan

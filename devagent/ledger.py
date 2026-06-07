@@ -130,6 +130,26 @@ def audits_summary(db_path: Path, run_id: str | None = None) -> dict:
     return {"scored": total, "parity": parity}
 
 
+def parity_stats(db_path: Path, *, run_kind: str | None = None,
+                 ctx_lo: int = 0, ctx_hi: int = 10**9) -> dict:
+    """Scored/parity counts for audits, optionally filtered by kind and context-token range —
+    the raw signal the self-tuning router consults (gap #6)."""
+    init_db(db_path)
+    where = ["verdict != 'skipped'", "context_tokens >= ?", "context_tokens < ?"]
+    params: list = [ctx_lo, ctx_hi]
+    if run_kind:
+        where.append("run_kind = ?")
+        params.append(run_kind)
+    clause = " AND ".join(where)
+    placeholders = ",".join("?" for _ in PARITY_VERDICTS)
+    with _connect(db_path) as conn:
+        scored = conn.execute(f"SELECT COUNT(*) FROM audits WHERE {clause}", params).fetchone()[0]
+        parity = conn.execute(
+            f"SELECT COUNT(*) FROM audits WHERE {clause} AND verdict IN ({placeholders})",
+            (*params, *PARITY_VERDICTS)).fetchone()[0]
+    return {"scored": scored, "parity": parity}
+
+
 def audits_by_bucket(db_path: Path, run_id: str, buckets: list[tuple[int, int]]) -> list[dict]:
     """Parity rate per context-token bucket, for a calibration run."""
     init_db(db_path)

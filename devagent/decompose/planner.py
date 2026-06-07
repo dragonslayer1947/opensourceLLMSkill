@@ -145,8 +145,27 @@ def _cache_dir(index: RepoIndex) -> Path:
     return Path(index.root) / ".devagent" / "cache" / "decompose"
 
 
-def _plan_cache_key(task: str, bundle: ContextBundle, max_files: int) -> str:
-    raw = task.strip() + "|" + "|".join(sorted(bundle.candidate_files)) + f"|{max_files}"
+def _files_fingerprint(index: RepoIndex, rels: list[str]) -> str:
+    """A fingerprint of the candidate files' current content (mtime+size), so a plan is reused only
+    while the code it was built against is unchanged (#4) — no stale decompositions on an evolving
+    repo. Mirrors the index cache's fingerprint approach."""
+    by_rel = {f.rel: f for f in index.files}
+    h = hashlib.sha1()
+    for rel in sorted(rels):
+        f = by_rel.get(rel)
+        if not f:
+            continue
+        try:
+            st = f.path.stat()
+            h.update(f"{rel}:{st.st_mtime_ns}:{st.st_size};".encode("utf-8"))
+        except OSError:
+            continue
+    return h.hexdigest()[:12]
+
+
+def _plan_cache_key(task: str, bundle: ContextBundle, max_files: int, index: RepoIndex) -> str:
+    raw = (task.strip() + "|" + "|".join(sorted(bundle.candidate_files)) + f"|{max_files}"
+           + "|" + _files_fingerprint(index, bundle.candidate_files))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -195,7 +214,7 @@ def decompose(
 
     # Plan cache (#4): an identical task over the same candidate files reuses the decomposition —
     # no planner call, $0. Keyed by content, so it invalidates when the task or file set changes.
-    key = _plan_cache_key(task, bundle, max_subtask_files)
+    key = _plan_cache_key(task, bundle, max_subtask_files, index)
     if use_cache:
         cached = _load_cached_plan(index, key)
         if cached:

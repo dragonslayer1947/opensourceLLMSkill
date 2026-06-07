@@ -90,6 +90,26 @@ def _tool_check(name: str, exe: str, args: list[str], root: Path, files: list[st
     return CheckResult(name, "fail", out.strip()[-600:])
 
 
+def gate_strength(gate_cfg: dict) -> dict:
+    """Report the gate's REAL correctness floor for this environment — accuracy is only as strong
+    as the checks that actually run. A missing tool (mypy/bandit) or a disabled check silently
+    lowers the floor; surfacing it keeps savings from being quoted without the quality caveat."""
+    active = ["syntax"]      # ast parse: always on, no external tool
+    skipped: list[str] = []
+    for name, key, tool in (("types", "run_types", "mypy"),
+                            ("lint", "run_lint", "ruff"),
+                            ("security", "run_security", "bandit")):
+        if gate_cfg.get(key, True) and shutil.which(tool) is not None:
+            active.append(name)
+        else:
+            reason = "disabled" if not gate_cfg.get(key, True) else "not installed"
+            skipped.append(f"{name} ({reason})")
+    # "types"/"security" missing materially weakens the floor; lint-only is the weakest useful gate.
+    weakened = any(s.startswith(("types", "security")) for s in skipped)
+    floor = "full" if not skipped else ("reduced" if not weakened else "weak")
+    return {"active": active, "skipped": skipped, "floor": floor}
+
+
 def run_gate(root: Path, changed_files: list[str], gate_cfg: dict) -> GateReport:
     report = GateReport()
     report.checks.append(_syntax_check(root, changed_files))

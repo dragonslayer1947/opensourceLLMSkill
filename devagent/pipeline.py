@@ -41,6 +41,7 @@ from .orchestration.classifier import classify
 from .planning import blast_radius
 from .planning import crosscut
 from .planning import plan_check
+from .planning import routing_memory
 from .validate import characterize
 from .prove.audit import differential_audit, persist as persist_audit
 from .review import reviewer as reviewer_mod
@@ -411,6 +412,18 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
             except Exception as e:  # noqa: BLE001 — contract-first is best-effort
                 console.print(f"[yellow]contract skipped[/yellow]: {e}")
 
+        # Self-tuning routing (#6): only trust local-first planning where recorded plan-parity
+        # supports it; otherwise fall back to frontier planning for this context size.
+        prefer_local = local_first_plan
+        if prefer_local:
+            ok, why = routing_memory.advise_local(
+                config.db_path, bundle.est_tokens,
+                parity_target=float(config.reporting.get("parity_target", 0.9)),
+                run_kind="plan_audit")
+            prefer_local = ok
+            if not ok:
+                console.print(f"[dim]routing memory: {why}[/dim]")
+
         console.print(f"[bold]Decomposing[/bold] (retrieved ~{bundle.est_tokens} ctx tokens, "
                       f"in-envelope={bundle.in_envelope}) …")
         with activity(console, "Planning subtasks (consulting the planner)"):
@@ -420,7 +433,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                 # Classifier may ESCALATE to decomposition; it never suppresses a structurally
                 # necessary one (large/windowed/multi-file still decompose via should_decompose).
                 force_decompose=(decision.route == "plan_execute"),
-                prefer_local=local_first_plan,  # local-first planning (#2); escalates if weak
+                prefer_local=prefer_local,  # local-first (#2), evidence-gated by routing memory (#6)
             )
         result.plan = plan
         tr.record("decompose", decomposed=plan.decomposed, n_subtasks=len(plan.subtasks),

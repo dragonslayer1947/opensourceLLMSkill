@@ -92,6 +92,17 @@ def summary(calls, pricing: dict[str, Pricing], local_ref: str = "sonnet") -> di
     }
 
 
+def estimate_host_overhead(n_subtasks: int, n_changed_files: int) -> tuple[int, int]:
+    """A rough, deterministic estimate of the HOST's own token spend on a task (gap #1), from
+    observable structure: the host writes the decomposition (output ~ per subtask) and reads the
+    task + each changed file/diff to verify (input ~ per changed file). It's an ESTIMATE — the
+    point is to stop reporting savings as if host orchestration were free. Pass --host-in/--host-out
+    for the real figure."""
+    out_tokens = 150 + 70 * max(n_subtasks, 1)
+    in_tokens = 300 + 120 * max(n_changed_files, 0)
+    return in_tokens, out_tokens
+
+
 def show_cost(config: Config, console: Console) -> None:
     t = ledger.totals(config.db_path)
     if not t or t.get("n", 0) == 0:

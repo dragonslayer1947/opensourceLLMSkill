@@ -119,9 +119,28 @@ def _run_summary(result) -> None:
                       f"≈ ${s['host_cost']:.4f} (not saved) → net end-to-end "
                       f"${s['actual'] + s['host_cost']:.4f}, {s['pct_local_end2end']:.0f}% local "
                       f"end-to-end[/dim]")
-    elif s["pct_local_exec"] >= 99.9 and s["exec_tokens"]:
-        console.print("  [dim]savings are execution-only; host orchestration tokens not measured "
-                      "(pass --host-in/--host-out to include them)[/dim]")
+    elif s["exec_tokens"]:
+        # No actual host tokens recorded → show an ESTIMATED end-to-end so the figure isn't
+        # silently execution-only (#1). Labeled as an estimate; --host-in/--host-out gives the real one.
+        n_sub = len(getattr(result.plan, "subtasks", []) or [])
+        n_files = len({f for o in result.outcomes for f in o.changed_files})
+        h_in, h_out = report.estimate_host_overhead(n_sub, n_files)
+        h_cost = report.cost_of(cfg.pricing, cfg.reporting.get("counterfactual_model", "sonnet"),
+                                h_in, h_out)
+        total = s["exec_tokens"] + h_in + h_out
+        e2e_local = s["local_tokens"] / total * 100 if total else 100.0
+        console.print(f"  [dim]+ est. host orchestration ~{h_in + h_out} tokens (≈${h_cost:.4f}, "
+                      f"not saved) → ~{e2e_local:.0f}% local end-to-end (estimate; pass "
+                      f"--host-in/--host-out for the real figure)[/dim]")
+
+    # Gate-strength caveat (#3): savings are only trustworthy if the correctness floor is intact.
+    from .validate.gate import gate_strength
+    gs = gate_strength(cfg.gate)
+    if gs["floor"] != "full":
+        color = "red" if gs["floor"] == "weak" else "yellow"
+        console.print(f"  [{color}]gate floor: {gs['floor']}[/{color}] — skipped "
+                      f"{', '.join(gs['skipped'])}; quality is verified only up to what ran "
+                      f"({', '.join(gs['active'])}).")
     applied = [o for o in result.outcomes if o.status == "applied"]
     failed = [o for o in result.outcomes if o.status == "gate_failed"]
     console.print(f"  subtasks: {len(applied)} applied, {len(failed)} gate-failed, "
@@ -547,6 +566,54 @@ def search(
         return
     for i, rel in enumerate(ranked, 1):
         console.print(f"  {i:>2}. {rel}")
+
+
+@app.command(name="eval-retrieval")
+def eval_retrieval(
+    path: str = typer.Option(".", "--path", "-p"),
+    k: int = typer.Option(5, "--k", "-k", help="Top-k cutoff for recall."),
+    show_misses: bool = typer.Option(False, "--misses", help="List files retrieval failed to surface."),
+):
+    """Measure retrieval health (gap #5): self-retrieval recall@k + MRR over the repo. Catches the
+    failure mode 'the right file isn't even retrievable' that the parity claim silently depends on."""
+    from .context.cache import build_index_cached
+    from .prove import retrieval_eval
+    root = Path(path).resolve()
+    idx = build_index_cached(root)
+    res = retrieval_eval.evaluate(idx, k=k)
+    color = "green" if res.recall_at_k >= 0.8 else "yellow" if res.recall_at_k >= 0.5 else "red"
+    console.print(f"[{color}]{res.render()}[/{color}]")
+    if show_misses and res.misses:
+        console.print("[dim]not in top-k:[/dim]")
+        for m in res.misses:
+            console.print(f"  • {m}")
+
+
+@app.command(name="audit-plan")
+def audit_plan(
+    task: str = typer.Argument(..., help="The goal to decompose and audit."),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Plan-parity audit (gap #2): decompose with the local AND frontier models, then a blinded
+    judge compares the breakdowns. Records the verdict so routing memory can learn where local
+    planning is trustworthy. The frontier plan is for comparison only — nothing is executed."""
+    from .prove import plan_audit
+    cfg = load_config()
+    reg = Registry(cfg)
+    router = Router(reg)
+    try:
+        res = plan_audit.plan_audit(task, path, cfg, reg, router)
+    except RoutingError as e:
+        console.print(f"[red]model error:[/red] {e}")
+        raise typer.Exit(1)
+    if res.verdict == "skipped":
+        console.print(f"[yellow]skipped[/yellow]: {res.reason}")
+        return
+    plan_audit.persist(cfg.db_path, res)
+    color = {"local_better": "green", "equivalent": "green", "frontier_better": "yellow"}[res.verdict]
+    console.print(f"plan-parity verdict: [{color}]{res.verdict}[/{color}]  [dim]({res.reason})[/dim]")
+    console.print(f"[dim]local={res.local_model} vs frontier={res.frontier_model} — recorded for "
+                  f"routing memory[/dim]")
 
 
 @app.command()
