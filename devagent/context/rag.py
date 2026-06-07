@@ -64,13 +64,21 @@ def _bm25(corpus: dict[str, list[str]], query: list[str], k1: float = 1.5, b: fl
 
 
 def rank_files(index, query: str, *, dependents: dict[str, set[str]] | None = None,
-               limit: int = 10) -> list[str]:
-    """Return repo-relative file paths ranked for the query (tiers 1–3 combined)."""
+               limit: int = 10, file_vectors: dict[str, list[float]] | None = None,
+               query_vector: list[float] | None = None) -> list[str]:
+    """Return repo-relative file paths ranked for the query.
+
+    Tiers 1–3 (exact + BM25 + graph) are always applied. When `file_vectors` and `query_vector`
+    are supplied (the optional semantic tier, gap #4), cosine similarity is blended in — this is
+    what surfaces a relevant file that shares no keywords with the task. Absent → lexical only,
+    so offline behaviour is unchanged."""
     q = tokenize(query)
-    if not q:
+    # With a semantic tier we can still rank a query that's all stopwords/symbols; without one,
+    # an empty token list means nothing to match.
+    if not q and not (file_vectors and query_vector):
         return []
     corpus = {f.rel: _file_tokens(f) for f in index.files}
-    scores = _bm25(corpus, q)
+    scores = _bm25(corpus, q) if q else {}
 
     # Tier 1 — exact symbol/stem matches get a strong boost.
     qset = set(q)
@@ -92,5 +100,14 @@ def rank_files(index, query: str, *, dependents: dict[str, set[str]] | None = No
             for nb in (deps_of.get(t, set()) | consumers.get(t, set())):
                 if nb not in scores:
                     scores[nb] = 0.3 * scores[t]
+
+    # Semantic tier — blend cosine(query, file) in by meaning. Weighted so a strong semantic
+    # match (cosine→1) is competitive with the exact-name boost, lifting keyword-less files.
+    if file_vectors and query_vector:
+        from .embed import cosine
+        for rel, vec in file_vectors.items():
+            c = cosine(query_vector, vec)
+            if c > 0:
+                scores[rel] = scores.get(rel, 0.0) + 4.0 * c
 
     return [rel for rel, _ in sorted(scores.items(), key=lambda x: x[1], reverse=True)][:limit]

@@ -478,13 +478,19 @@ def search(
     path: str = typer.Option(".", "--path", "-p"),
     limit: int = typer.Option(10, "--limit", "-n"),
 ):
-    """Three-tier retrieval (exact + BM25 + graph) — rank files for a query."""
+    """Retrieval ranking (exact + BM25 + graph [+ semantic]) — rank files for a query."""
     from .context import rag
     from .context.cache import build_index_cached
+    from .context.embed import get_embedder
+    from .config import load_config
     from .planning.blast_radius import build_dependents
     root = Path(path).resolve()
-    idx = build_index_cached(root)
-    ranked = rag.rank_files(idx, query, dependents=build_dependents(idx), limit=limit)
+    embedder = get_embedder(load_config())  # semantic tier (gap #4) — None unless configured
+    idx = build_index_cached(root, embedder=embedder)
+    fv = {e.rel: e.vector for e in idx.files if e.vector} if embedder else None
+    qv = embedder.embed_one(query) if (embedder and fv) else None
+    ranked = rag.rank_files(idx, query, dependents=build_dependents(idx), limit=limit,
+                            file_vectors=fv or None, query_vector=qv)
     if not ranked:
         console.print("[dim]no matches[/dim]")
         return

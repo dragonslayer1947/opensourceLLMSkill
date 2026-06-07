@@ -86,6 +86,11 @@ class FileEntry:
     symbols: list[Symbol] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)
     terms: set[str] = field(default_factory=set)  # bounded content terms for retrieval
+    # Cross-service (runtime) signals for blast radius (gap #3) — see _service_signals.
+    routes_defined: set[str] = field(default_factory=set)  # route keys this file SERVES
+    routes_used: set[str] = field(default_factory=set)     # route keys this file CALLS
+    topics: set[str] = field(default_factory=set)          # pub/sub topic names this file touches
+    vector: list[float] | None = None                      # optional semantic embedding (gap #4)
 
 
 @dataclass
@@ -108,12 +113,79 @@ def _signature(node: ast.AST) -> str:
     return ""
 
 
+_HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options"}
+_ROUTE_DECO = _HTTP_METHODS | {"route", "websocket", "api_route"}
+_TOPIC_CALLS = {"publish", "subscribe", "produce", "consume", "emit", "send_message"}
+
+
+def _route_segments(s: str) -> set[str]:
+    """Static (non-parameter) path segments of a URL or path string — the join keys between a
+    route DEFINITION (`@app.get('/services/{id}')`) and a CALL (`client.get('/services/123')`).
+    Using the SET of segments (link on any overlap) tolerates router-prefix mounting: a handler
+    decorated `/{id}/cancel` under a `/bookings` prefix still matches a caller of
+    `/bookings/{id}/cancel` via the shared `cancel` segment."""
+    s = (s or "").strip()
+    if "://" in s:
+        rest = s.split("://", 1)[1]
+        s = "/" + rest.split("/", 1)[1] if "/" in rest else "/"
+    s = s.split("?")[0].split("#")[0]
+    return {seg.lower() for seg in s.split("/")
+            if seg and not seg.startswith(("{", ":", "<")) and not seg.isdigit()}
+
+
+def _const_str(node: ast.AST) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _looks_like_path(s: str) -> bool:
+    return s.startswith("/") or "://" in s
+
+
+def _service_signals(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
+    """Best-effort, deterministic extraction of cross-service edges from the AST:
+    routes a file SERVES (decorators), routes it CALLS (http-client calls), and pub/sub
+    topics it touches. No execution, no network — just shape-matching."""
+    defined: set[str] = set()
+    used: set[str] = set()
+    topics: set[str] = set()
+    deco_calls: set[int] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for deco in node.decorator_list:
+                if (isinstance(deco, ast.Call) and isinstance(deco.func, ast.Attribute)
+                        and deco.func.attr.lower() in _ROUTE_DECO and deco.args):
+                    deco_calls.add(id(deco))
+                    p = _const_str(deco.args[0])
+                    if p and _looks_like_path(p):
+                        defined |= _route_segments(p)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or id(node) in deco_calls:
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        attr = func.attr.lower()
+        if attr in _HTTP_METHODS and node.args:
+            p = _const_str(node.args[0])
+            if p and _looks_like_path(p):  # a client.get("/x") / requests.post("http://…/x")
+                used |= _route_segments(p)
+        elif attr in _TOPIC_CALLS and node.args:
+            t = _const_str(node.args[0])
+            if t:
+                topics.add(t.strip().lower())
+
+    return {k for k in defined if k}, {k for k in used if k}, topics
+
+
 def _parse_python(path: Path, rel: str, text: str) -> FileEntry:
     entry = FileEntry(path=path, rel=rel, lines=text.count("\n") + 1, terms=_content_terms(text))
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return entry  # unparseable file still indexed by name
+    entry.routes_defined, entry.routes_used, entry.topics = _service_signals(tree)
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             entry.symbols.append(Symbol(

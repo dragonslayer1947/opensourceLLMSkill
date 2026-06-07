@@ -75,6 +75,16 @@ executor   = ["qwen-local", "claude-cli"]   # local primary; CLI fallback if no 
 compressor = ["qwen-local", "claude-cli"]
 planner    = ["claude-cli-opus", "claude-cli", "qwen-local"]   # decomposition; CLI subscription
 reviewer   = ["claude-cli", "qwen-local"]
+# embedder = ["embed-local"]                # OPT-IN semantic retrieval (gap #4): rank files by
+#                                           #   MEANING, not just keywords — surfaces the right slice
+#                                           #   on a 100k-LOC repo even with no shared terms. Declare
+#                                           #   an embeddings model below and uncomment. Absent =>
+#                                           #   lexical-only (default, fully offline & deterministic).
+# [models.embed-local]                      # e.g. llama.cpp started with `--embeddings`, or Ollama:
+#   protocol = "openai-compat"              #   `ollama pull nomic-embed-text`
+#   base_url = "http://localhost:8080/v1"   # vectors are cached in the index, so a query embeds ONE
+#   model_id = "nomic-embed-text"           #   string then does O(n) cosine — scales to large repos.
+#   tier     = "local"
 
 [fallback]
 retries                = 2

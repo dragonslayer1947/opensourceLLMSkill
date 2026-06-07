@@ -39,14 +39,26 @@ def retrieve(
     max_file_lines: int,
     max_files: int = 4,
     explicit_paths: set[str] | None = None,
+    embedder=None,
 ) -> ContextBundle:
     from ..planning.blast_radius import build_dependents
     explicit = explicit_paths or set()
     by_rel = {e.rel: e for e in index.files}
 
-    # Three-tier ranking (exact + BM25 + graph). Explicit paths are forced to the front.
+    # Optional semantic tier (gap #4): if an embedder is configured and files already carry
+    # vectors (computed at index time), embed the task once and let cosine lift keyword-less hits.
+    file_vectors = query_vector = None
+    if embedder is not None:
+        fv = {e.rel: e.vector for e in index.files if e.vector}
+        if fv:
+            qv = embedder.embed_one(task)
+            if qv:
+                file_vectors, query_vector = fv, qv
+
+    # Ranking (exact + BM25 + graph [+ semantic]). Explicit paths are forced to the front.
     dependents = build_dependents(index) if index.files else {}
-    ranked = rag.rank_files(index, task, dependents=dependents, limit=10)
+    ranked = rag.rank_files(index, task, dependents=dependents, limit=10,
+                            file_vectors=file_vectors, query_vector=query_vector)
     explicit_rels = [e.rel for e in index.files
                      if e.rel in explicit or e.rel.rsplit("/", 1)[-1] in explicit]
     ordered = explicit_rels + [r for r in ranked if r not in explicit_rels]

@@ -29,6 +29,8 @@ def _index_to_dict(index: RepoIndex) -> dict:
         "rel": f.rel, "lines": f.lines,
         "symbols": [vars(s) for s in f.symbols],
         "imports": f.imports, "terms": sorted(f.terms),
+        "routes_defined": sorted(f.routes_defined), "routes_used": sorted(f.routes_used),
+        "topics": sorted(f.topics), "vector": f.vector,
     } for f in index.files]}
 
 
@@ -39,25 +41,37 @@ def _index_from_dict(root: Path, data: dict) -> RepoIndex:
             path=root / fd["rel"], rel=fd["rel"], lines=fd.get("lines", 0),
             symbols=[Symbol(**s) for s in fd.get("symbols", [])],
             imports=list(fd.get("imports", [])), terms=set(fd.get("terms", [])),
+            routes_defined=set(fd.get("routes_defined", [])),
+            routes_used=set(fd.get("routes_used", [])),
+            topics=set(fd.get("topics", [])), vector=fd.get("vector"),
         ))
     return index
 
 
-def build_index_cached(root: str | Path, *, use_cache: bool = True) -> RepoIndex:
+def build_index_cached(root: str | Path, *, use_cache: bool = True, embedder=None) -> RepoIndex:
     root = Path(root).resolve()
     cache_path = root / CACHE_FILE
     fp = fingerprint(root)
 
+    cached: RepoIndex | None = None
     if use_cache and cache_path.exists():
         try:
             data = json.loads(cache_path.read_text(encoding="utf-8"))
             if data.get("fingerprint") == fp:
-                return _index_from_dict(root, data)
+                cached = _index_from_dict(root, data)
         except (OSError, json.JSONDecodeError, TypeError):
             pass  # corrupt/old cache -> rebuild
 
-    index = build_index(root)
-    if use_cache:
+    index = cached if cached is not None else build_index(root)
+
+    # Optional semantic tier (gap #4): compute embeddings for files that lack a cached vector,
+    # then persist so the next run reuses them. No-op when no embedder is configured.
+    if embedder is not None:
+        from .embed import attach_embeddings
+        if attach_embeddings(index, embedder) and use_cache:
+            cached = None  # vectors changed -> rewrite cache below
+
+    if use_cache and cached is None:
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {"fingerprint": fp, **_index_to_dict(index)}

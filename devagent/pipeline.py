@@ -18,6 +18,7 @@ from rich.console import Console
 from . import ledger, report
 from .config import Config, load_config
 from .context.cache import build_index_cached
+from .context.embed import get_embedder
 from .context.retrieve import retrieve
 from .decompose.planner import Plan, Subtask, decompose
 from .execute import apply as ap
@@ -114,6 +115,7 @@ def _run_subtask(
         max_file_lines=int(env.get("max_file_lines", 400)),
         max_files=int(env.get("max_subtask_files", 3)) + 1,
         explicit_paths=set(subtask.target_files) | (files or set()),
+        embedder=get_embedder(config),  # semantic tier (gap #4) — no-op unless configured
     )
     if not bundle.in_envelope:
         result.in_envelope = False
@@ -240,8 +242,9 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     result = RunResult(session_id=session_id, plan=Plan([], False, None))
     tr = trace_mod.new_trace(session_id, task)  # decision trail (devagent trace)
 
+    embedder = get_embedder(config)  # semantic retrieval tier (gap #4) — None unless configured
     with activity(console, "Indexing the repo"):
-        index = build_index_cached(task_root)
+        index = build_index_cached(task_root, embedder=embedder)
     console.print(f"[bold]Indexed[/bold] {len(index.files)} files")
     tr.record("index", files=len(index.files))
 
@@ -250,6 +253,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         max_context_tokens=int(config.envelope.get("max_context_tokens", 12000)),
         max_file_lines=int(config.envelope.get("max_file_lines", 400)),
         explicit_paths=file_set,
+        embedder=embedder,
     )
     tr.record("retrieve", est_tokens=bundle.est_tokens, in_envelope=bundle.in_envelope,
               candidates=bundle.candidate_files[:10])
@@ -530,15 +534,17 @@ def plan_only(task: str, path: str, *, console: Console,
     task_root = Path(path).resolve()
     router = Router(Registry(config))
 
+    embedder = get_embedder(config)
     with activity(console, "Indexing the repo"):
-        index = build_index_cached(task_root)
+        index = build_index_cached(task_root, embedder=embedder)
     console.print(f"[bold]Indexed[/bold] {len(index.files)} files")
 
     env = config.envelope
     bundle = retrieve(index, task,
                       max_context_tokens=int(env.get("max_context_tokens", 12000)),
                       max_file_lines=int(env.get("max_file_lines", 400)),
-                      explicit_paths=set(files or []))
+                      explicit_paths=set(files or []),
+                      embedder=embedder)
 
     has_pattern = bool(pattern_registry.relevant(pattern_registry.load_patterns(task_root), task))
     decision = classify(task, in_envelope=bundle.in_envelope, est_tokens=bundle.est_tokens,
@@ -635,7 +641,7 @@ def resume_session(session_id: str, path: str, *, assume_yes: bool, console: Con
                   f"subtasks remain")
     registry = Registry(config)
     router = Router(registry)
-    index = build_index_cached(task_root)
+    index = build_index_cached(task_root, embedder=get_embedder(config))
     rules = safety_rules.load_rules(task_root)
     constraints = adr.constraints_context(adr.load_adrs(task_root))
     result = RunResult(session_id=session_id, plan=Plan(subtasks, True, None))

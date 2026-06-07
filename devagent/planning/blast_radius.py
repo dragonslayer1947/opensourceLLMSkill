@@ -54,6 +54,11 @@ def build_dependents(index: RepoIndex) -> dict[str, set[str]]:
             target = key_to_file.get(imp) or key_to_file.get(imp.split(".")[-1])
             if target and target != f.rel:
                 dependents[target].add(f.rel)
+
+    # Merge cross-service (HTTP/queue) runtime edges — coupling the import graph can't see.
+    from . import service_edges
+    for src, deps in service_edges.runtime_dependents(index).items():
+        dependents.setdefault(src, set()).update(deps)
     return dependents
 
 

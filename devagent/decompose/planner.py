@@ -27,8 +27,18 @@ Each step must be small enough for a junior model to implement with a tiny slice
 - be a single coherent change,
 - have a clear, testable outcome.
 
+CRITICAL — declare shared interfaces in "provides". For every step, list the exact public names
+and signatures that step EXPOSES for later steps to call: functions, classes, the import path of
+a module-level singleton, route paths, etc. These strings are injected VERBATIM into every
+dependent step's prompt, so independently-built pieces call each other with NO drift (the single
+biggest cause of "it lints but doesn't fit together"). Be precise and import-accurate, e.g.
+  "store: module-level singleton — from app.store import store"
+  "class OrderRepo with create(order: Order) -> Order in app/orders/repo.py"
+If a step exposes nothing other steps need, use [].
+
 Return ONLY a JSON array. Each element:
-  {{"id": "s1", "description": "...", "target_files": ["path/a.py"], "depends_on": []}}
+  {{"id": "s1", "description": "...", "target_files": ["path/a.py"], "depends_on": [],
+    "provides": ["class OrderRepo with create(order: Order) -> Order in app/orders/repo.py"]}}
 Order steps so dependencies come first. No prose outside the JSON.
 """
 
@@ -142,6 +152,7 @@ def decompose(
             description=str(item.get("description", "")).strip(),
             target_files=[str(p) for p in item.get("target_files", []) if p],
             depends_on=[str(d) for d in item.get("depends_on", [])],
+            provides=[str(p).strip() for p in item.get("provides", []) or [] if p],
         ))
     if not subtasks:
         subtasks = [Subtask(id="s1", description=task, target_files=bundle.candidate_files[:1])]
