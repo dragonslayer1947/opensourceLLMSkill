@@ -10,9 +10,11 @@ Policy:
 The planner writes the plan only — it never writes implementation."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ..context.index import RepoIndex
 from ..context.retrieve import ContextBundle
@@ -104,46 +106,8 @@ def should_decompose(bundle: ContextBundle, max_subtask_files: int) -> bool:
     return False
 
 
-def decompose(
-    task: str,
-    index: RepoIndex,
-    bundle: ContextBundle,
-    router: Router,
-    *,
-    max_subtask_files: int,
-    force_direct: bool = False,
-    force_decompose: bool = False,
-) -> Plan:
-    if force_direct or (not force_decompose and not should_decompose(bundle, max_subtask_files)):
-        return Plan(
-            subtasks=[Subtask(id="s1", description=task, target_files=bundle.candidate_files[:1])],
-            decomposed=False,
-            planner_model=None,
-        )
-
-    skeleton = _repo_skeleton(index, bundle.candidate_files)
-    system = PLANNER_SYSTEM.format(max_files=max_subtask_files)
-    user = (
-        f"TASK:\n{task}\n\n"
-        f"RELEVANT FILES (signatures only):\n{skeleton or '(no indexed candidates)'}\n\n"
-        f"Decompose into the smallest safe ordered steps."
-    )
-    result = router.complete("planner", system, user, max_tokens=1500, cacheable_system=True)
-    arr = _extract_json_array(result.text)
-
-    if not arr:
-        # Planner output unusable -> safe fallback: run the whole task as one subtask.
-        return Plan(
-            subtasks=[Subtask(id="s1", description=task, target_files=bundle.candidate_files[:1])],
-            decomposed=True,
-            planner_model=result.model_name,
-            planner_tier=result.tier,
-            tokens_in=result.tokens_in,
-            tokens_out=result.tokens_out,
-            cost_usd=result.cost_usd,
-        )
-
-    subtasks = []
+def _subs_from_arr(arr: list, task: str, bundle: ContextBundle) -> list[Subtask]:
+    subtasks: list[Subtask] = []
     for i, item in enumerate(arr, 1):
         if not isinstance(item, dict):
             continue
@@ -154,8 +118,131 @@ def decompose(
             depends_on=[str(d) for d in item.get("depends_on", [])],
             provides=[str(p).strip() for p in item.get("provides", []) or [] if p],
         ))
+    return subtasks
+
+
+def _weak_plan(subtasks: list[Subtask], max_files: int) -> bool:
+    """Cheap, deterministic 'is this plan obviously bad?' check — the escalation trigger for
+    local-first planning. A weak local plan bounces to the frontier; a sound one is used for free.
+    (The full structural/goal-backward check still runs later in the pipeline.)"""
     if not subtasks:
-        subtasks = [Subtask(id="s1", description=task, target_files=bundle.candidate_files[:1])]
+        return True
+    ids = [s.id for s in subtasks]
+    if len(ids) != len(set(ids)):
+        return True
+    idset = set(ids)
+    for s in subtasks:
+        if not s.description:
+            return True
+        if len(s.target_files) > max_files:
+            return True
+        if any(d not in idset for d in s.depends_on):
+            return True
+    return False
+
+
+def _cache_dir(index: RepoIndex) -> Path:
+    return Path(index.root) / ".devagent" / "cache" / "decompose"
+
+
+def _plan_cache_key(task: str, bundle: ContextBundle, max_files: int) -> str:
+    raw = task.strip() + "|" + "|".join(sorted(bundle.candidate_files)) + f"|{max_files}"
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_cached_plan(index: RepoIndex, key: str) -> list[Subtask] | None:
+    p = _cache_dir(index) / f"{key}.json"
+    if not p.exists():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    subs = _subs_from_arr(data.get("subtasks", []), "", None)  # type: ignore[arg-type]
+    return subs or None
+
+
+def _save_cached_plan(index: RepoIndex, key: str, subtasks: list[Subtask]) -> None:
+    try:
+        d = _cache_dir(index)
+        d.mkdir(parents=True, exist_ok=True)
+        payload = {"subtasks": [
+            {"id": s.id, "description": s.description, "target_files": s.target_files,
+             "depends_on": s.depends_on, "provides": s.provides} for s in subtasks]}
+        (d / f"{key}.json").write_text(json.dumps(payload), encoding="utf-8")
+    except OSError:
+        pass  # caching is best-effort
+
+
+def decompose(
+    task: str,
+    index: RepoIndex,
+    bundle: ContextBundle,
+    router: Router,
+    *,
+    max_subtask_files: int,
+    force_direct: bool = False,
+    force_decompose: bool = False,
+    prefer_local: bool = True,
+    use_cache: bool = True,
+) -> Plan:
+    if force_direct or (not force_decompose and not should_decompose(bundle, max_subtask_files)):
+        return Plan(
+            subtasks=[Subtask(id="s1", description=task, target_files=bundle.candidate_files[:1])],
+            decomposed=False,
+            planner_model=None,
+        )
+
+    # Plan cache (#4): an identical task over the same candidate files reuses the decomposition —
+    # no planner call, $0. Keyed by content, so it invalidates when the task or file set changes.
+    key = _plan_cache_key(task, bundle, max_subtask_files)
+    if use_cache:
+        cached = _load_cached_plan(index, key)
+        if cached:
+            return Plan(subtasks=cached, decomposed=True, planner_model="(cached)",
+                        planner_tier="local")
+
+    skeleton = _repo_skeleton(index, bundle.candidate_files)
+    system = PLANNER_SYSTEM.format(max_files=max_subtask_files)
+    user = (
+        f"TASK:\n{task}\n\n"
+        f"RELEVANT FILES (signatures only):\n{skeleton or '(no indexed candidates)'}\n\n"
+        f"Decompose into the smallest safe ordered steps."
+    )
+
+    def _attempt(role: str):
+        try:
+            res = router.complete(role, system, user, max_tokens=1500, cacheable_system=True)
+        except Exception:  # noqa: BLE001 — a down local planner just means escalate
+            return None, None
+        arr = _extract_json_array(res.text)
+        return res, (_subs_from_arr(arr, task, bundle) if arr else None)
+
+    # Local-first planning (#2): try the local model; escalate to the frontier planner ONLY if the
+    # local plan is missing or weak. Decomposition is the costliest frontier call, so this is the
+    # biggest saving — and it's safe because the plan is deterministically validated before use.
+    result = subtasks = None
+    if prefer_local:
+        result, subtasks = _attempt("planner_local")
+        if subtasks is None or _weak_plan(subtasks, max_subtask_files):
+            result, subtasks = _attempt("planner")
+    else:
+        result, subtasks = _attempt("planner")
+
+    if not subtasks:
+        # Planner output unusable -> safe fallback: run the whole task as one subtask.
+        return Plan(
+            subtasks=[Subtask(id="s1", description=task, target_files=bundle.candidate_files[:1])],
+            decomposed=True,
+            planner_model=result.model_name if result else None,
+            planner_tier=result.tier if result else None,
+            tokens_in=result.tokens_in if result else 0,
+            tokens_out=result.tokens_out if result else 0,
+            cost_usd=result.cost_usd if result else 0.0,
+        )
+
+    if use_cache:
+        _save_cached_plan(index, key, subtasks)
 
     return Plan(
         subtasks=subtasks,

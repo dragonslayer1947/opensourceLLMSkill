@@ -76,6 +76,7 @@ def run(
     host_model: str = typer.Option(None, "--host-model", help="Host model for pricing the orchestration tokens (default: reporting.counterfactual_model)."),
     plan_check: bool = typer.Option(True, "--plan-check/--no-plan-check", help="Goal-backward check that the decomposition is complete before executing."),
     characterize: bool = typer.Option(False, "--characterize", help="Pin current behavior of untested target files with generated tests; roll back if a change breaks it."),
+    frontier_plan: bool = typer.Option(False, "--frontier-plan", help="Force the frontier model to decompose. Default is local-first: the local model plans, escalating to frontier only if the plan is weak."),
 ):
     """Decompose a task into in-envelope subtasks, execute locally, gate, and apply.
 
@@ -94,7 +95,8 @@ def run(
                               files=list(file or []), role_overrides=overrides, audit=audit,
                               flags=set(flag or []), contract=contract, review=review, test=test,
                               parallel=parallel, from_plan=from_plan, host_tokens=host_tokens,
-                              check_plan=plan_check, characterize_untested=characterize)
+                              check_plan=plan_check, characterize_untested=characterize,
+                              local_first_plan=not frontier_plan)
     except (RoutingError, FileNotFoundError, ValueError) as e:
         console.print(f"\n[red]error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")

@@ -70,11 +70,19 @@ timeout_s = 400
 
 # ── Role -> ordered model chain (first = primary, rest = fallback). ──
 [roles]
-classifier = ["qwen-local", "claude-cli"]
-executor   = ["qwen-local", "claude-cli"]   # local primary; CLI fallback if no local server is up
-compressor = ["qwen-local", "claude-cli"]
-planner    = ["claude-cli-opus", "claude-cli", "qwen-local"]   # decomposition; CLI subscription
-reviewer   = ["claude-cli", "qwen-local"]
+classifier   = ["qwen-local", "claude-cli"]
+executor     = ["qwen-local", "claude-cli"] # local primary; CLI fallback if no local server is up
+                                            # Tip (#5 right-sizing): point this at a small *coder*
+                                            #   model (7B–14B) — subtasks are tiny by design, so a
+                                            #   coder model is at parity AND much faster/cheaper.
+compressor   = ["qwen-local", "claude-cli"]
+planner_local = ["qwen-local"]              # LOCAL-FIRST planning: the local model decomposes; the
+                                            #   plan is validated, and only a WEAK plan escalates to
+                                            #   `planner` below. Free decomposition is the biggest
+                                            #   single saving. (Force frontier with `run --frontier-plan`.)
+planner      = ["claude-cli-opus", "claude-cli", "qwen-local"]  # frontier fallback for hard plans
+reviewer     = ["claude-cli", "qwen-local"] # frontier-first; for multi-subtask runs only ONE review
+                                            #   call is spent (whole-changeset-vs-goal), not per-diff
 # embedder = ["embed-local"]                # OPT-IN semantic retrieval (gap #4): rank files by
 #                                           #   MEANING, not just keywords — surfaces the right slice
 #                                           #   on a 100k-LOC repo even with no shared terms. Declare

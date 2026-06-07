@@ -159,3 +159,8 @@ Report:
   whole task — it's execution-only.
 - **VERIFY the goal**, not just the gate, before calling it done.
 - If the gate keeps failing, surface it — split or escalate that piece; don't quietly take over.
+- **Spend your OWN tokens sparingly (this is the biggest hidden cost).** Write a terse plan, then
+  **trust the deterministic gates**: let `devagent verify` / the gate check the work and read diffs
+  **only when a run reports a failure** — don't re-read clean output line by line. The gate is a
+  stricter, cheaper reviewer than your own reading. Keeping host tokens low is what makes the
+  end-to-end savings real, not just the execution-only figure.

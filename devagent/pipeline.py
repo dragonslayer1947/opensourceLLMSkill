@@ -301,7 +301,8 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         contract: bool = True, review: bool = False, test: bool = False,
         parallel: bool = False, from_plan: str | None = None,
         host_tokens: tuple[int, int, str] | None = None,
-        check_plan: bool = True, characterize_untested: bool = False) -> RunResult:
+        check_plan: bool = True, characterize_untested: bool = False,
+        local_first_plan: bool = True) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
@@ -419,6 +420,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                 # Classifier may ESCALATE to decomposition; it never suppresses a structurally
                 # necessary one (large/windowed/multi-file still decompose via should_decompose).
                 force_decompose=(decision.route == "plan_execute"),
+                prefer_local=local_first_plan,  # local-first planning (#2); escalates if weak
             )
         result.plan = plan
         tr.record("decompose", decomposed=plan.decomposed, n_subtasks=len(plan.subtasks),
@@ -433,13 +435,17 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
 
     # Goal-backward plan check (Tier-1) — is the decomposition COMPLETE and coherent? A missing
     # subtask is silent under-delivery; trusting the plan blindly is the deepest unverified step.
-    sgaps = plan_check.structural_gaps(plan.subtasks)          # deterministic, free
+    sgaps = plan_check.structural_gaps(plan.subtasks)          # deterministic, free — always
     review_gaps: list[str] = []
-    if check_plan and len(plan.subtasks) > 1:
-        with activity(console, "Checking the plan for missing steps (goal-backward)"):
-            review_gaps, pmeta = plan_check.completeness_review(task, plan.subtasks, router)
+    # Model completeness review only when WE just decomposed. A host-authored / --from-plan plan
+    # was already designed and reviewed, so re-checking it with a model is wasted spend (#1). When
+    # we do run it, route it to the LOCAL model — free; structural_gaps + `verify` are the guards.
+    if check_plan and len(plan.subtasks) > 1 and not from_plan:
+        with activity(console, "Checking the plan for missing steps (local, goal-backward)"):
+            review_gaps, pmeta = plan_check.completeness_review(task, plan.subtasks, router,
+                                                                role="executor")
         if pmeta:
-            result.calls.append(Call(pmeta["model"] or "?", pmeta["tier"] or "cli",
+            result.calls.append(Call(pmeta["model"] or "?", pmeta["tier"] or "local",
                                      pmeta["tokens_in"], pmeta["tokens_out"], pmeta["cost_usd"]))
     for g in sgaps:
         console.print(f"[yellow]plan gap[/yellow]: {g}")
@@ -542,6 +548,11 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         return bool(reason)
 
     by_id = {s.id: s for s in plan.subtasks}
+    # Review consolidation (#6): for a multi-subtask run, skip the per-subtask frontier review and
+    # spend ONE frontier call on the whole-changeset-vs-goal review at the end (it subsumes the
+    # per-diff pass and catches cross-file issues the per-diff pass can't). Single-subtask runs keep
+    # the per-diff review (there's no changeset to review).
+    subtask_review = review and len(plan.subtasks) <= 1
 
     def _run_one(st: Subtask, use_spinner: bool = True) -> SubtaskOutcome:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
@@ -555,7 +566,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
             cons = (constraints + "\n\nSHARED INTERFACES (defined by earlier subtasks — use these "
                     "names/signatures EXACTLY):\n" + "\n".join(f"- {i}" for i in ifaces)).strip()
         outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
-                               file_set, rules, flags, cons, review, all_patterns,
+                               file_set, rules, flags, cons, subtask_review, all_patterns,
                                use_spinner=use_spinner)
         new_calls = result.calls[pre:]
         tr.record("subtask", id=st.id, status=outcome.status, files=outcome.changed_files,
