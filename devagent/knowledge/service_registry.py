@@ -105,3 +105,14 @@ def write_sample(root: Path) -> Path:
 def downstream_consumers(services: dict[str, Service], name: str) -> list[str]:
     """Services that consume `name` — i.e. who breaks if `name` changes its API."""
     return sorted(s.name for s in services.values() if name in s.consumes_names)
+
+
+def produced_spec_paths(service: Service) -> list[str]:
+    """Repo-relative paths of the OpenAPI specs this service produces (root + spec, normalized)."""
+    base = (service.root or "").replace("\\", "/").strip("/")
+    out = []
+    for spec in service.produces_specs:
+        s = spec.replace("\\", "/").lstrip("./")
+        rel = f"{base}/{s}" if base else s
+        out.append(rel.replace("//", "/"))
+    return out

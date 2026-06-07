@@ -29,3 +29,16 @@ def test_downstream_consumers(tmp_path):
 
 def test_load_missing_returns_empty(tmp_path):
     assert sr.load_services(tmp_path) == {}
+
+
+def test_produced_spec_paths(tmp_path):
+    _write(tmp_path, "checkout",
+           "name: checkout\nroot: services/checkout\napis:\n  produces:\n    - spec: ./openapi.yaml\n")
+    svc = sr.load_services(tmp_path)["checkout"]
+    assert sr.produced_spec_paths(svc) == ["services/checkout/openapi.yaml"]
+
+
+def test_produced_spec_paths_no_root(tmp_path):
+    _write(tmp_path, "svc", "name: svc\napis:\n  produces:\n    - spec: api/openapi.yaml\n")
+    svc = sr.load_services(tmp_path)["svc"]
+    assert sr.produced_spec_paths(svc) == ["api/openapi.yaml"]

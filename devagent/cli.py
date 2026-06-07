@@ -174,13 +174,17 @@ def resume(
 def services(
     path: str = typer.Option(".", "--path", "-p"),
     init: bool = typer.Option(False, "--init", help="Write a sample service definition and exit."),
+    check: bool = typer.Option(False, "--check", help="Diff each produced OpenAPI spec (git HEAD vs working tree) for breaking changes."),
 ):
-    """List services in the registry (or --init to scaffold one)."""
+    """List services (or --init to scaffold, --check for cross-service contract validation)."""
     from .knowledge import service_registry as sr
     root = Path(path).resolve()
     if init:
         p = sr.write_sample(root)
         console.print(f"sample service at [bold]{p}[/bold]")
+        return
+    if check:
+        _services_check(root)
         return
     svcs = sr.load_services(root)
     if not svcs:
@@ -194,6 +198,51 @@ def services(
         table.add_row(s.name, s.team, s.sla_tier, ", ".join(s.consumes_names) or "—",
                       ", ".join(sr.downstream_consumers(svcs, s.name)) or "—")
     console.print(table)
+
+
+def _services_check(root: Path) -> None:
+    """Cross-service contract validation: diff each produced spec (git HEAD vs working tree)."""
+    import subprocess
+
+    import yaml
+
+    from .execute import contract as cm
+    from .knowledge import service_graph as sg
+    from .knowledge import service_registry as sr
+
+    svcs = sr.load_services(root)
+    if not svcs:
+        console.print(f"[dim]no services in {sr.registry_dir(root)}[/dim]")
+        return
+    any_breaking = False
+    checked = 0
+    for s in svcs.values():
+        for spec_rel in sr.produced_spec_paths(s):
+            new_path = root / spec_rel
+            if not new_path.exists():
+                continue
+            old = subprocess.run(["git", "show", f"HEAD:{spec_rel}"], cwd=str(root),
+                                 capture_output=True, text=True)
+            if old.returncode != 0:
+                continue  # new spec at HEAD — nothing to diff
+            checked += 1
+            try:
+                old_doc = yaml.safe_load(old.stdout) or {}
+                new_doc = yaml.safe_load(new_path.read_text(encoding="utf-8")) or {}
+            except yaml.YAMLError:
+                continue
+            changes = cm.diff_openapi(old_doc, new_doc)
+            if changes:
+                any_breaking = True
+                consumers = sorted(sg.transitive_downstream(svcs, s.name))
+                console.print(f"[red]{s.name}[/red] ({spec_rel}): {len(changes)} breaking change(s)"
+                              + (f" — affects {', '.join(consumers)}" if consumers else ""))
+                for c in changes[:6]:
+                    console.print(f"  • [{c.kind}] {c.location}" + (f" — {c.detail}" if c.detail else ""))
+    if checked == 0:
+        console.print("[dim]no produced specs changed vs HEAD (or git unavailable)[/dim]")
+    elif not any_breaking:
+        console.print(f"[green]no breaking contract changes[/green] ({checked} spec(s) checked)")
 
 
 @app.command()
