@@ -1,5 +1,29 @@
-# Normalize line endings: source files use LF in the repo.
+# Normalize line endings: store text as LF in the repo, check out native on each OS.
 * text=auto eol=lf
-*.png binary
-*.jpg binary
-*.db binary
+
+# Explicit text types (LF in the repo regardless of author's platform).
+*.py    text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.json  text eol=lf
+*.cfg   text eol=lf
+*.ini   text eol=lf
+*.txt   text eol=lf
+*.sh    text eol=lf
+
+# Windows-only scripts must keep CRLF to run correctly.
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# Binary assets — never normalize or diff as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.gguf  binary
+*.db    binary
+*.zip   binary
