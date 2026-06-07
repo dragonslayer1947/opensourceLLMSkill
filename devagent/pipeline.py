@@ -8,6 +8,7 @@ Every write is snapshotted; sessions checkpoint per subtask so a crash can `resu
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from .knowledge import pattern_registry
 from .knowledge import service_graph, service_registry
 from .models.registry import Registry
 from .models.router import Router
+from .observability import trace as trace_mod
 from .orchestration.classifier import classify
 from .planning import blast_radius
 from .prove.audit import differential_audit, persist as persist_audit
@@ -225,10 +227,12 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
 
     session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     result = RunResult(session_id=session_id, plan=Plan([], False, None))
+    tr = trace_mod.new_trace(session_id, task)  # decision trail (devagent trace)
 
     console.print(f"[bold]Indexing[/bold] {task_root} …")
     index = build_index_cached(task_root)
     console.print(f"  {len(index.files)} files indexed")
+    tr.record("index", files=len(index.files))
 
     bundle = retrieve(
         index, task,
@@ -236,6 +240,10 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         max_file_lines=int(config.envelope.get("max_file_lines", 400)),
         explicit_paths=file_set,
     )
+    tr.record("retrieve", est_tokens=bundle.est_tokens, in_envelope=bundle.in_envelope,
+              candidates=bundle.candidate_files[:10])
+    if profiles:
+        tr.record("rules", rules=len(rules), compliance=profiles)
     if not bundle.views:
         console.print("[yellow]no existing files matched the task[/yellow] — new files will be "
                       "created. Pass --file <path> to target existing code explicitly.")
@@ -256,6 +264,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                         max_context_tokens=max_ctx, has_pattern=has_pattern)
     console.print(f"[bold]Routing[/bold]: {decision.route} (score {decision.score}"
                   + (f" — {', '.join(decision.reasons)}" if decision.reasons else "") + ")")
+    tr.record("routing", route=decision.route, score=decision.score, reasons=decision.reasons)
 
     # Contract-first for API tasks — generate + validate an OpenAPI spec before implementing.
     contract_doc = None
@@ -285,6 +294,8 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         force_decompose=(decision.route == "plan_execute"),
     )
     result.plan = plan
+    tr.record("decompose", decomposed=plan.decomposed, n_subtasks=len(plan.subtasks),
+              planner=plan.planner_model)
     if plan.decomposed:
         result.calls.append(Call(plan.planner_model or "?", plan.planner_tier or "cli",
                                  plan.tokens_in, plan.tokens_out, plan.cost_usd))
@@ -304,6 +315,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         )
         color = {"low": "green", "medium": "yellow", "high": "red"}[br.level]
         console.print(f"[{color}]{br.render()}[/{color}]")
+        tr.record("blast_radius", score=br.score, level=br.level, affected=len(br.affected))
 
         # Service-level blast radius (V2) — which downstream services may be affected.
         svcs = service_registry.load_services(task_root)
@@ -342,8 +354,16 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
 
     def _run_one(st: Subtask) -> SubtaskOutcome:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
-        return _run_subtask(st, task_root, config, router, index, console, result, dry_run,
-                            file_set, rules, flags, constraints, review, all_patterns)
+        t0 = time.monotonic()
+        pre = len(result.calls)
+        outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
+                               file_set, rules, flags, constraints, review, all_patterns)
+        new_calls = result.calls[pre:]
+        tr.record("subtask", id=st.id, status=outcome.status, files=outcome.changed_files,
+                  escalated=outcome.escalated, duration_s=round(time.monotonic() - t0, 3),
+                  cost_usd=round(sum(c.cost_usd for c in new_calls), 6),
+                  model=next((c.model for c in new_calls), ""))
+        return outcome
 
     try:
         if parallel and len(plan.subtasks) > 1 and not dry_run:
@@ -433,6 +453,12 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                 console.print(f"  verdict: [bold]{ar.verdict}[/bold] [dim]({ar.reason[:120]})[/dim]")
         except Exception as e:  # noqa: BLE001 — audit is best-effort, never fails the run
             console.print(f"  [yellow]audit failed[/yellow]: {e}")
+
+    actual, counter = report.billing(result.calls, config.pricing, local_ref)
+    tr.record("final", status=result.status, tokens=sum(c.tin + c.tout for c in result.calls),
+              actual_cost=round(actual, 6), counterfactual_cost=round(counter, 6),
+              applied=len([o for o in result.outcomes if o.status == "applied"]))
+    tr.save(task_root)
 
     return result
 
