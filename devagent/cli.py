@@ -518,6 +518,24 @@ def adr_new(path: str = typer.Option(".", "--path", "-p")):
     console.print(f"sample ADR at [bold]{p}[/bold]")
 
 
+@adr_app.command("set-status")
+def adr_set_status(
+    adr_id: str = typer.Argument(...),
+    status: str = typer.Argument(..., help="draft | accepted | deprecated | superseded"),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Transition an ADR's lifecycle status."""
+    from .knowledge import adr as adr_mod
+    try:
+        ok = adr_mod.set_status(Path(path).resolve(), adr_id, status)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(2)
+    console.print(f"[green]{adr_id} → {status}[/green]" if ok else f"[yellow]no ADR '{adr_id}'[/yellow]")
+    if not ok:
+        raise typer.Exit(1)
+
+
 @adr_app.command("check")
 def adr_check(path: str = typer.Option(".", "--path", "-p")):
     """Check the working-tree git diff against accepted ADRs (semantic, via the local model)."""

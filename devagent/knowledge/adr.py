@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 ADR_DIR = ".devagent/adrs"
+VALID_STATUSES = {"draft", "accepted", "deprecated", "superseded"}
 
 SAMPLE_ADR = """\
 id: "0001"
@@ -110,6 +111,26 @@ def write_sample(root: Path) -> Path:
     if not p.exists():
         p.write_text(SAMPLE_ADR, encoding="utf-8")
     return p
+
+
+def set_status(root: Path, adr_id: str, status: str) -> bool:
+    """Transition an ADR's lifecycle status (draft→accepted→deprecated→superseded). Returns
+    False if the ADR isn't found. Edits the status line in place to preserve the file."""
+    if status not in VALID_STATUSES:
+        raise ValueError(f"invalid status '{status}' (expected one of {sorted(VALID_STATUSES)})")
+    d = adr_dir(root)
+    if not d.exists():
+        return False
+    for p in sorted(d.glob("*.yaml")) + sorted(d.glob("*.yml")):
+        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        if str(data.get("id")) == str(adr_id):
+            text = p.read_text(encoding="utf-8")
+            new, n = re.subn(r"(?m)^(status\s*:).*$", rf"\1 {status}", text, count=1)
+            if n == 0:
+                new = text.rstrip() + f"\nstatus: {status}\n"
+            p.write_text(new, encoding="utf-8")
+            return True
+    return False
 
 
 def constraints_context(adrs: list[ADR]) -> str:
