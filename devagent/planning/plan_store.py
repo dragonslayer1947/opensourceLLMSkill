@@ -50,6 +50,21 @@ def save_plan(root: Path, task: str, plan: Plan, plan_id: str | None = None) -> 
     return plan_id, p
 
 
+def subtasks_from_data(items) -> list[Subtask]:
+    """Build Subtasks from a list of dicts (from YAML on disk or a host-authored JSON plan)."""
+    out: list[Subtask] = []
+    for i, s in enumerate(items or [], 1):
+        if not isinstance(s, dict):
+            continue
+        out.append(Subtask(
+            id=str(s.get("id") or f"s{i}"),
+            description=str(s.get("description", "")).strip(),
+            target_files=[str(x) for x in s.get("target_files", []) or [] if x],
+            depends_on=[str(x) for x in s.get("depends_on", []) or []],
+        ))
+    return out
+
+
 def load_plan(root: Path, ref: str) -> tuple[str, Plan]:
     """Load a plan by id or by file path. Returns (task, Plan). Raises FileNotFoundError."""
     cand = Path(ref)
@@ -57,16 +72,7 @@ def load_plan(root: Path, ref: str) -> tuple[str, Plan]:
     if not p.exists():
         raise FileNotFoundError(f"no plan '{ref}' (looked at {p})")
     data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    subtasks = [
-        Subtask(
-            id=str(s.get("id") or f"s{i}"),
-            description=str(s.get("description", "")).strip(),
-            target_files=[str(x) for x in s.get("target_files", []) or [] if x],
-            depends_on=[str(x) for x in s.get("depends_on", []) or []],
-        )
-        for i, s in enumerate(data.get("subtasks", []) or [], 1)
-        if isinstance(s, dict)
-    ]
+    subtasks = subtasks_from_data(data.get("subtasks", []))
     if not subtasks:
         raise ValueError(f"plan '{ref}' has no subtasks")
     plan = Plan(subtasks=subtasks, decomposed=bool(data.get("decomposed", True)),

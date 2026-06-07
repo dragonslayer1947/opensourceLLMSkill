@@ -51,3 +51,27 @@ def test_list_plans(tmp_path):
 def test_missing_plan_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         plan_store.load_plan(tmp_path, "nope")
+
+
+def test_subtasks_from_data_parses_and_skips_garbage():
+    items = [
+        {"id": "s1", "description": "do x", "target_files": ["a.py"], "depends_on": []},
+        "not a dict",
+        {"description": "no id given", "target_files": ["b.py"], "depends_on": ["s1"]},
+    ]
+    subs = plan_store.subtasks_from_data(items)
+    # garbage skipped; the dict with no id gets a unique auto-id (position-based)
+    assert len(subs) == 2 and subs[0].id == "s1"
+    assert subs[1].id not in ("", subs[0].id)
+    assert subs[1].depends_on == ["s1"]
+
+
+def test_host_authored_plan_imports_and_runs_back(tmp_path):
+    """The skill's path: a host-authored JSON plan saved, then loadable for `run --from-plan`."""
+    items = [{"id": "s1", "description": "add repo", "target_files": ["repo.py"], "depends_on": []}]
+    plan = Plan(subtasks=plan_store.subtasks_from_data(items), decomposed=True,
+                planner_model="host-agent")
+    pid, _ = plan_store.save_plan(tmp_path, "build orders", plan)
+    task, loaded = plan_store.load_plan(tmp_path, pid)
+    assert task == "build orders" and loaded.planner_model == "host-agent"
+    assert [s.id for s in loaded.subtasks] == ["s1"]

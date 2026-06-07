@@ -136,6 +136,36 @@ def plan(
         raise typer.Exit(1)
 
 
+@app.command(name="plan-import")
+def plan_import(
+    task: str = typer.Option(..., "--task", help="The overall task this plan implements."),
+    file: str = typer.Option(None, "--file", "-f", help="JSON file of subtasks; omit to read stdin."),
+    path: str = typer.Option(".", "--path", "-p"),
+    planner_name: str = typer.Option("host-agent", "--planner-name", help="Who authored the plan."),
+):
+    """Save a plan authored by a host agent (the decompose-execute skill) for `run --from-plan`.
+
+    Reads JSON — a list [{"id","description","target_files","depends_on"}] or {"subtasks": [...]}
+    — so the host model can plan and the local model executes exactly those subtasks."""
+    from .decompose.planner import Plan
+    from .planning import plan_store
+    raw = Path(file).read_text(encoding="utf-8") if file else sys.stdin.read()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]invalid JSON:[/red] {e}")
+        raise typer.Exit(2)
+    items = data.get("subtasks") if isinstance(data, dict) else data
+    subtasks = plan_store.subtasks_from_data(items or [])
+    if not subtasks:
+        console.print("[red]no subtasks in the imported plan[/red]")
+        raise typer.Exit(2)
+    plan = Plan(subtasks=subtasks, decomposed=True, planner_model=planner_name)
+    pid, p = plan_store.save_plan(Path(path).resolve(), task, plan)
+    console.print(f"plan [cyan]{pid}[/cyan] saved ({len(subtasks)} subtasks) → {p}")
+    console.print(f"[dim]execute on the local model:[/dim] devagent run --from-plan {pid} -p {path}")
+
+
 @app.command()
 def cost():
     """Show cumulative cost savings (actual vs all-frontier counterfactual)."""
