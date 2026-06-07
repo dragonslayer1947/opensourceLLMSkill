@@ -35,6 +35,7 @@ from .orchestration.classifier import classify
 from .planning import blast_radius
 from .prove.audit import differential_audit, persist as persist_audit
 from .review import reviewer as reviewer_mod
+from .validate import migration_gate
 from .validate import safety_rules
 from .validate import test_runner
 from .validate.gate import run_gate
@@ -127,8 +128,9 @@ def _run_subtask(
                       f"({'; '.join(out.notes) or 'parse/match failure'})")
         return SubtaskOutcome(subtask.id, subtask.description, [], {}, False, "no_edits")
 
-    # Safety rules — evaluated before any write.
+    # Safety rules + migration gate — evaluated before any write.
     violations = safety_rules.evaluate(prepared.changes, rules or [], flags or set())
+    violations += migration_gate.check(prepared.changes, flags or set())
     for v in violations:
         tag = "[red]BLOCK[/red]" if v.severity == "block" else "[yellow]warn[/yellow]"
         console.print(f"  {tag} [{v.rule_id}] {v.path}: {v.message}")
