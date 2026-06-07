@@ -27,6 +27,7 @@ from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .knowledge import adr
 from .knowledge import compliance
+from .knowledge import incidents as incidents_mod
 from .knowledge import pattern_registry
 from .knowledge import service_graph, service_registry
 from .models.registry import Registry
@@ -238,6 +239,14 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     if not bundle.views:
         console.print("[yellow]no existing files matched the task[/yellow] — new files will be "
                       "created. Pass --file <path> to target existing code explicitly.")
+
+    # Incident knowledge — surface lessons for files this task touches.
+    relevant_incidents = incidents_mod.for_files(
+        incidents_mod.load_incidents(task_root), bundle.candidate_files)
+    if relevant_incidents:
+        console.print(f"[yellow]{len(relevant_incidents)} past incident(s)[/yellow] touch these files")
+        constraints = (constraints + "\n\nPAST INCIDENTS (do not repeat):\n"
+                       + incidents_mod.lessons_context(relevant_incidents)).strip()
 
     # Routing classifier — decide direct vs plan→execute up front (free, deterministic).
     max_ctx = int(config.envelope.get("max_context_tokens", 12000))

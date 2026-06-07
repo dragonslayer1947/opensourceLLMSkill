@@ -423,6 +423,30 @@ def status(path: str = typer.Option(".", "--path", "-p")):
 
 
 @app.command()
+def incidents(
+    path: str = typer.Option(".", "--path", "-p"),
+    init: bool = typer.Option(False, "--init", help="Write a sample incident and exit."),
+):
+    """List recorded incidents (or --init to scaffold one)."""
+    from .knowledge import incidents as inc
+    root = Path(path).resolve()
+    if init:
+        p = inc.write_sample(root)
+        console.print(f"sample incident at [bold]{p}[/bold]")
+        return
+    items = inc.load_incidents(root)
+    if not items:
+        console.print("[dim]no incidents — run `devagent incidents --init`[/dim]")
+        return
+    table = Table(title="incidents", show_header=True, header_style="bold")
+    for c in ("id", "date", "title", "files"):
+        table.add_column(c)
+    for i in items:
+        table.add_row(i.id, i.date, i.title[:40], ", ".join(i.files)[:40])
+    console.print(table)
+
+
+@app.command()
 def compliance():
     """List available compliance profiles and which are active in config."""
     from .knowledge import compliance as comp
