@@ -20,12 +20,18 @@ DEFAULT_CONFIG_TOML = """\
 
 # ── Models: local or cloud. Two protocols cover almost everything. ──
 [models.qwen-local]
-protocol  = "openai-compat"            # llama.cpp OpenAI-compatible server
+protocol  = "openai-compat"            # any OpenAI-compatible local server
 base_url  = "http://localhost:8080/v1"
 model_id  = "qwen3-27b"
 tier      = "local"                    # local => ~$0
 timeout_s = 180
-api_key_env = ""                       # llama.cpp needs no key
+api_key_env = ""                       # local servers need no key
+# Getting a local executor running (the model that does the bulk of the work):
+#   • llama.cpp:  llama-server -m qwen3-27b.gguf -c 8192 --port 8080   → base_url .../v1 above
+#   • Ollama (easiest on Windows):  `ollama serve` then `ollama pull qwen2.5-coder:7b`,
+#       then set  base_url = "http://localhost:11434/v1"  and  model_id = "qwen2.5-coder:7b"
+# Tip: subtasks are SMALL by design, so a 7B–14B *coder* model is usually enough and far faster
+#      than a 27B general model. Verify reachability with `devagent status`.
 
 # Frontier via the Claude CLI subscription — NO per-token API billing.
 # Spawns `claude -p` using your logged-in Pro/Max auth. Run `claude auth status` to verify.

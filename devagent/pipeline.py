@@ -482,6 +482,76 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     return result
 
 
+@dataclass
+class PlanPreview:
+    plan: Plan
+    route: str
+    est_tokens: int
+    blast_level: str = "low"
+    blast_score: int = 0
+
+
+def plan_only(task: str, path: str, *, console: Console,
+              files: list[str] | None = None,
+              role_overrides: dict[str, str] | None = None) -> PlanPreview:
+    """Decomposition-first: index → route → ask the planner (Claude) to decompose, then show the
+    subtask plan + blast radius. NOTHING is executed and no local model is needed — this is how
+    you see and review the decomposition before handing the pieces to the local executor."""
+    config = load_config()
+    for role, model in (role_overrides or {}).items():
+        config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
+    task_root = Path(path).resolve()
+    router = Router(Registry(config))
+
+    with activity(console, "Indexing the repo"):
+        index = build_index_cached(task_root)
+    console.print(f"[bold]Indexed[/bold] {len(index.files)} files")
+
+    env = config.envelope
+    bundle = retrieve(index, task,
+                      max_context_tokens=int(env.get("max_context_tokens", 12000)),
+                      max_file_lines=int(env.get("max_file_lines", 400)),
+                      explicit_paths=set(files or []))
+
+    has_pattern = bool(pattern_registry.relevant(pattern_registry.load_patterns(task_root), task))
+    decision = classify(task, in_envelope=bundle.in_envelope, est_tokens=bundle.est_tokens,
+                        max_context_tokens=int(env.get("max_context_tokens", 12000)),
+                        has_pattern=has_pattern)
+    console.print(f"[bold]Routing[/bold]: {decision.route} (score {decision.score})")
+
+    with activity(console, "Decomposing with the planner (Claude) — executing nothing"):
+        plan = decompose(task, index, bundle, router,
+                         max_subtask_files=int(env.get("max_subtask_files", 3)),
+                         force_decompose=(decision.route == "plan_execute"))
+
+    if plan.decomposed:
+        console.print(f"\n[bold]Plan[/bold] — {len(plan.subtasks)} subtasks "
+                      f"[dim](planner: {plan.planner_model})[/dim]:")
+    else:
+        console.print("\n[bold]Plan[/bold] — in-envelope; would run as 1 direct subtask "
+                      "[dim](no planner call)[/dim]:")
+    for st in plan.subtasks:
+        files_s = f"  [dim]{', '.join(st.target_files)}[/dim]" if st.target_files else ""
+        dep = f"  [dim]⟵ {', '.join(st.depends_on)}[/dim]" if st.depends_on else ""
+        console.print(f"  [cyan]{st.id}[/cyan] {st.description}{files_s}{dep}")
+
+    planned = sorted(set(files or []) | {f for st in plan.subtasks for f in st.target_files}
+                     | set(bundle.candidate_files[:3]))
+    level, score = "low", 0
+    if planned:
+        br = blast_radius.analyze(index, planned,
+                                  warn=int(config.limits.get("blast_radius_warn", 10)),
+                                  block=int(config.limits.get("blast_radius_block", 40)))
+        level, score = br.level, br.score
+        color = {"low": "green", "medium": "yellow", "high": "red"}[br.level]
+        console.print(f"[{color}]{br.render()}[/{color}]")
+
+    snippet = task if len(task) <= 50 else task[:50] + "…"
+    console.print(f"\n[dim]execute it:[/dim] devagent run \"{snippet}\"  "
+                  f"[dim](or just type the task in the shell — the local model executes each step)[/dim]")
+    return PlanPreview(plan, decision.route, bundle.est_tokens, level, score)
+
+
 def _consistency_check(result: RunResult, console: Console) -> None:
     """After parallel execution, verify no file was written by two subtasks (the file-claim
     invariant). The scheduler guarantees this; the check catches any regression (gap #9)."""

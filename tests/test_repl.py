@@ -40,6 +40,11 @@ def test_ask_keeps_question_text():
     assert a.kind == "ask" and a.arg == "what does the router do?"
 
 
+def test_plan_keeps_task_text():
+    a = parse_line("/plan understand this repo and create a structure")
+    assert a.kind == "plan" and a.arg == "understand this repo and create a structure"
+
+
 def test_repo_keeps_raw_windows_path():
     a = parse_line(r"/repo C:\Users\me\proj")
     assert a.kind == "repo" and a.arg == r"C:\Users\me\proj"   # backslashes preserved

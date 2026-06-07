@@ -109,6 +109,28 @@ def _run_summary(result) -> None:
 
 
 @app.command()
+def plan(
+    task: str = typer.Argument(..., help="What to do, in natural language."),
+    path: str = typer.Option(".", "--path", "-p", help="Repo to work in."),
+    file: list[str] = typer.Option(None, "--file", "-f", help="Target existing file(s) (repeatable)."),
+    planner: str = typer.Option(None, "--planner", help="Override the planner model."),
+):
+    """Decompose a task with the planner (Claude) and show the plan — execute nothing.
+
+    The decomposition-first view: see how the task breaks into small, in-envelope subtasks before
+    handing them to the local executor with `devagent run`. Needs no local model."""
+    overrides = {"planner": planner} if planner else {}
+    try:
+        pipeline.plan_only(task, path, console=console, files=list(file or []),
+                           role_overrides=overrides or None)
+    except RoutingError as e:
+        console.print(f"\n[red]model error:[/red] {e}")
+        console.print("[dim]the planner needs the `claude` CLI logged in (or a reachable model). "
+                      "Check `devagent status`.[/dim]")
+        raise typer.Exit(1)
+
+
+@app.command()
 def cost():
     """Show cumulative cost savings (actual vs all-frontier counterfactual)."""
     report.show_cost(load_config(), console)
@@ -425,6 +447,27 @@ def status(path: str = typer.Option(".", "--path", "-p")):
     console.print("\n[bold]roles[/bold]:")
     for role, chain in cfg.roles.items():
         console.print(f"  {role}: {' → '.join(chain)}")
+
+    # Execution readiness — the bottleneck for "local does the work, Claude decomposes".
+    console.print("\n[bold]execution[/bold]:")
+    chain = cfg.role_chain("executor")
+    local = next((cfg.models[n] for n in chain
+                  if n in cfg.models and cfg.models[n].protocol == "openai-compat"), None)
+    if local is None:
+        console.print("  no local executor configured — execution would run on a CLI/API model.")
+    elif _probe_http(local.base_url):
+        console.print(f"  local executor [green]reachable[/green] at {local.base_url} — "
+                      f"subtasks run locally (~$0).")
+    else:
+        console.print(f"  local executor [red]unreachable[/red] at {local.base_url}")
+        console.print("  start one →  [bold]ollama serve[/bold] && [bold]ollama pull "
+                      "qwen2.5-coder:7b[/bold]  (set base_url=http://localhost:11434/v1, "
+                      "model_id=qwen2.5-coder:7b)")
+        fallback = next((n for n in chain if n in cfg.models
+                         and cfg.models[n].protocol != "openai-compat"), None)
+        if fallback:
+            console.print(f"  until then, execution falls back to [bold]{fallback}[/bold] "
+                          f"(Claude does the work — local% will read 0).")
 
 
 @app.command()

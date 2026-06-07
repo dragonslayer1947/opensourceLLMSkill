@@ -27,7 +27,7 @@ from . import __version__
 
 SESSION_COMMANDS = {"exit", "quit", "q", "help", "?", "h", "ask", "a", "repo", "cd",
                     "clear", "flags", "dry", "auto", "review", "test", "parallel",
-                    "executor", "planner"}
+                    "executor", "planner", "plan"}
 TOGGLES = {"dry", "auto", "review", "test", "parallel"}
 ROLE_COMMANDS = {"executor", "planner"}
 
@@ -82,6 +82,8 @@ def parse_line(line: str) -> Action:
         return Action("help")
     if cmd in ("ask", "a"):
         return Action("ask", arg=rest)
+    if cmd == "plan":
+        return Action("plan", arg=rest)
     if cmd in ("repo", "cd"):
         return Action("repo", arg=rest)          # raw — keeps Windows backslash paths intact
     if cmd == "clear":
@@ -140,6 +142,7 @@ def _banner(session: Session, console: Console) -> None:
 HELP = """\
 [bold]How to talk to devagent[/bold]
   <text>              run it as a coding task (decompose → execute → gate → apply)
+  /plan <text>        decompose with Claude and SHOW the plan — runs nothing, no local model
   /ask <question>     ask about the repo — read-only, no edits
   /repo <path>        switch the working repo (alias /cd)
   /flags              show current run flags + role overrides
@@ -175,6 +178,20 @@ def _do_task(session: Session, task: str, console: Console) -> None:
             session.touched.extend(o.changed_files)
     from .cli import _run_summary
     _run_summary(result)
+
+
+def _do_plan(session: Session, task: str, console: Console) -> None:
+    if not task:
+        console.print("[yellow]usage: /plan <task> — shows the decomposition, runs nothing[/yellow]")
+        return
+    from . import pipeline
+    from .models.router import RoutingError
+    try:
+        pipeline.plan_only(task, str(session.path), console=console,
+                           role_overrides=session.roles or None)
+    except RoutingError as e:
+        console.print(f"[red]model error:[/red] {e}")
+        console.print("[dim]the planner needs the `claude` CLI logged in — check /status.[/dim]")
 
 
 def _do_ask(session: Session, question: str, console: Console) -> None:
@@ -245,6 +262,8 @@ def dispatch(action: Action, session: Session, console: Console) -> bool:
         console.print(HELP)
     elif k == "task":
         _do_task(session, action.arg, console)
+    elif k == "plan":
+        _do_plan(session, action.arg, console)
     elif k == "ask":
         _do_ask(session, action.arg, console)
     elif k == "repo":
