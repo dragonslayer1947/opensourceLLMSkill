@@ -96,7 +96,17 @@ devagent run --from-plan <id> -p <repo>
 Add the engine's own safety levers when warranted:
 - `--review` for risky/auth/payments/data-loss changes (reviewer agent; HIGH finding rolls back),
 - `--test` to run the suite after applying (auto-rollback on failure),
+- `--characterize` when editing **existing, untested** code: it pins the current behavior with
+  generated tests *before* the change and rolls back if the change alters it — your safety net
+  where no tests exist yet,
 - `--contract` is on by default for API tasks.
+
+The run also performs a **goal-backward plan check** automatically (even on `--from-plan`): it
+surfaces structural gaps (a depended-on subtask with no `provides`; the same file edited by
+unordered subtasks) and asks the planner for any missing required steps. If it flags gaps, fix the
+plan (Step 2/3) before proceeding — an incomplete plan is silent under-delivery. A **cross-cutting
+change** (a wide rename / signature change) is detected and a coordination directive is injected
+into every subtask so they apply it identically.
 
 The local model implements each subtask; the gate verifies each; failures escalate automatically.
 

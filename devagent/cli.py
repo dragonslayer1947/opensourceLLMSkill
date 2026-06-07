@@ -74,6 +74,8 @@ def run(
     host_in: int = typer.Option(0, "--host-in", help="Host (orchestrator) input tokens spent on THIS task — for honest end-to-end cost (gap #5)."),
     host_out: int = typer.Option(0, "--host-out", help="Host (orchestrator) output tokens spent on THIS task."),
     host_model: str = typer.Option(None, "--host-model", help="Host model for pricing the orchestration tokens (default: reporting.counterfactual_model)."),
+    plan_check: bool = typer.Option(True, "--plan-check/--no-plan-check", help="Goal-backward check that the decomposition is complete before executing."),
+    characterize: bool = typer.Option(False, "--characterize", help="Pin current behavior of untested target files with generated tests; roll back if a change breaks it."),
 ):
     """Decompose a task into in-envelope subtasks, execute locally, gate, and apply.
 
@@ -91,7 +93,8 @@ def run(
         result = pipeline.run(task or "", path, dry_run=dry_run, assume_yes=yes, console=console,
                               files=list(file or []), role_overrides=overrides, audit=audit,
                               flags=set(flag or []), contract=contract, review=review, test=test,
-                              parallel=parallel, from_plan=from_plan, host_tokens=host_tokens)
+                              parallel=parallel, from_plan=from_plan, host_tokens=host_tokens,
+                              check_plan=plan_check, characterize_untested=characterize)
     except (RoutingError, FileNotFoundError, ValueError) as e:
         console.print(f"\n[red]error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")

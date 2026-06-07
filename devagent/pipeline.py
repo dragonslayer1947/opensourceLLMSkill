@@ -8,6 +8,7 @@ Every write is snapshotted; sessions checkpoint per subtask so a crash can `resu
 from __future__ import annotations
 
 import json
+import shlex
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -37,6 +38,9 @@ from .models.router import Router
 from .observability import trace as trace_mod
 from .orchestration.classifier import classify
 from .planning import blast_radius
+from .planning import crosscut
+from .planning import plan_check
+from .validate import characterize
 from .prove.audit import differential_audit, persist as persist_audit
 from .review import reviewer as reviewer_mod
 from .ui import activity
@@ -295,7 +299,8 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         audit: bool = False, flags: set[str] | None = None,
         contract: bool = True, review: bool = False, test: bool = False,
         parallel: bool = False, from_plan: str | None = None,
-        host_tokens: tuple[int, int, str] | None = None) -> RunResult:
+        host_tokens: tuple[int, int, str] | None = None,
+        check_plan: bool = True, characterize_untested: bool = False) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
@@ -417,6 +422,39 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         else:
             console.print("  in-envelope → [bold]direct[/bold] (1 subtask, no frontier call, ~$0)")
 
+    # Goal-backward plan check (Tier-1) — is the decomposition COMPLETE and coherent? A missing
+    # subtask is silent under-delivery; trusting the plan blindly is the deepest unverified step.
+    sgaps = plan_check.structural_gaps(plan.subtasks)          # deterministic, free
+    review_gaps: list[str] = []
+    if check_plan and len(plan.subtasks) > 1:
+        with activity(console, "Checking the plan for missing steps (goal-backward)"):
+            review_gaps, pmeta = plan_check.completeness_review(task, plan.subtasks, router)
+        if pmeta:
+            result.calls.append(Call(pmeta["model"] or "?", pmeta["tier"] or "cli",
+                                     pmeta["tokens_in"], pmeta["tokens_out"], pmeta["cost_usd"]))
+    for g in sgaps:
+        console.print(f"[yellow]plan gap[/yellow]: {g}")
+    for g in review_gaps:
+        console.print(f"[yellow]possible missing step[/yellow]: {g}")
+    tr.record("plan_check", structural=len(sgaps), missing=len(review_gaps))
+    if (sgaps or review_gaps) and not assume_yes and not dry_run:
+        from rich.prompt import Confirm
+        if not Confirm.ask("Plan may be incomplete — proceed anyway?", default=True):
+            result.status = "aborted"
+            console.print("[yellow]aborted — refine the plan, then re-run[/yellow]")
+            return result
+
+    # Cross-cutting change (Tier-1) — a wide rename/signature is ONE intent across many files.
+    # Inject a coordination directive so every subtask applies it identically; the green-tree
+    # invariant (#6) then rolls back any piece that leaves a dangling reference to the old form.
+    cc = crosscut.detect(task)
+    if cc:
+        renames = ", ".join(f"{o}→{n}" for o, n in cc.renames)
+        console.print(f"[cyan]cross-cutting change[/cyan] ({cc.kind})"
+                      + (f": {renames}" if renames else "") + " — coordinating all subtasks")
+        constraints = (constraints + "\n\n" + cc.directive()).strip()
+        tr.record("crosscut", kind=cc.kind, renames=cc.renames)
+
     # Blast radius — impact analysis before any execution.
     planned = sorted(file_set | {f for st in plan.subtasks for f in st.target_files}
                      | set(bundle.candidate_files[:3]))
@@ -456,6 +494,35 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                               f"{holder.get('session_id', '?')} (pid {holder.get('pid', '?')})")
             result.status = "locked"
             return result
+
+    # Characterization-test gate (Tier-1) — PIN the current behavior of untested code before we
+    # touch it. Generated tests are run against the UNCHANGED code and only kept if they pass (so
+    # they describe what the code does today). They then ride the verification below: if a subtask
+    # changes that behavior, the pinned test fails and the run is rolled back instead of shipping.
+    pinned_tests: list[str] = []
+    if characterize_untested and not dry_run:
+        from .validate import test_gen, test_runner
+
+        def _gen(src_rel: str, code: str) -> str:
+            text, meta = test_gen.generate_tests(src_rel, code, router)
+            result.calls.append(Call(meta.get("model") or "?", meta.get("tier") or "local",
+                                     meta.get("tokens_in", 0), meta.get("tokens_out", 0),
+                                     meta.get("cost_usd", 0.0)))
+            return text
+
+        def _runt(test_path: str) -> tuple[bool, str]:
+            return test_runner.run_tests(task_root, f"pytest -q {shlex.quote(test_path)}")
+
+        all_targets = sorted({f for st in plan.subtasks for f in st.target_files})
+        with activity(console, "Pinning characterization tests for untested code"):
+            pins = characterize.pin_all(task_root, index, all_targets, _gen, _runt)
+        for r in pins:
+            mark = "[green]pinned[/green]" if r.pinned else "[dim]skip[/dim]"
+            console.print(f"  {mark} {r.src_rel} — {r.detail}")
+        pinned_tests = [r.test_path for r in pins if r.pinned]
+        if pinned_tests:
+            console.print(f"[bold]{len(pinned_tests)}[/bold] characterization test(s) now pin "
+                          f"current behavior")
 
     local_ref = config.reporting.get("local_counterfactual_price", "sonnet")
 
@@ -551,6 +618,23 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                     ap.undo_from_snapshot(task_root, _snap_dir(task_root, session_id, o.subtask_id))
                 result.status = "tests_failed"
                 console.print(f"[red]impact gate failed → rolled back[/red]\n{ires.output[-700:]}")
+
+        # Characterization verification (Tier-1): did the change preserve the behavior we pinned?
+        if pinned_tests and result.status == "applied":
+            from .validate import test_runner
+            cmd = "pytest -q " + " ".join(shlex.quote(p) for p in pinned_tests)
+            with activity(console, "Verifying pinned behavior survived the change"):
+                ok, cout = test_runner.run_tests(task_root, cmd)
+            if ok:
+                console.print("[green]characterization: behavior preserved[/green]")
+            else:
+                for o in result.outcomes:
+                    ap.undo_from_snapshot(task_root, _snap_dir(task_root, session_id, o.subtask_id))
+                for p in pinned_tests:
+                    (task_root / p).unlink(missing_ok=True)
+                result.status = "behavior_changed"
+                console.print(f"[red]characterization FAILED — behavior changed → rolled back[/red]"
+                              f"\n{cout[-700:]}")
     finally:
         lock_mod.release(task_root, acquired, session_id)
 
