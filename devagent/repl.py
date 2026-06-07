@@ -127,10 +127,26 @@ class _Reader:
             except Exception:  # noqa: BLE001 — any setup issue → plain input()
                 self.session = None
 
-    def read(self, prompt_str: str) -> str:
+    def read(self, prompt_str: str, toolbar=None) -> str:
         if self.session is not None:
-            return self.session.prompt(prompt_str)
+            return self.session.prompt(prompt_str, bottom_toolbar=toolbar)
         return input(prompt_str)
+
+
+def _bottom_toolbar(session):
+    """A persistent status bar pinned to the bottom of the CLI: a blue '● devagent active'
+    indicator plus the current repo and any active run flags."""
+    try:
+        from prompt_toolkit.formatted_text import HTML
+        from html import escape
+        flags = session.flags.label().strip() if session.flags.label().strip() else "default"
+        repo = escape(session.path.name)
+        return HTML(
+            f'<style fg="ansiblue">● devagent active</style>'
+            f'  <style fg="ansibrightblack">repo:</style> {repo}'
+            f'  <style fg="ansibrightblack">flags:</style> {escape(flags)}')
+    except Exception:  # noqa: BLE001 — toolbar is cosmetic, never break the prompt
+        return None
 
 
 def _banner(session: Session, console: Console) -> None:
@@ -306,7 +322,7 @@ def run_repl(path: str = ".") -> None:
     while True:
         prompt_str = f"\n{session.flags.label()}devagent ({session.path.name})> "
         try:
-            line = reader.read(prompt_str)
+            line = reader.read(prompt_str, toolbar=lambda: _bottom_toolbar(session))
         except KeyboardInterrupt:
             console.print("[dim](ctrl-c — type /exit or Ctrl-D to quit)[/dim]")
             continue

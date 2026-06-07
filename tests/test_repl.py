@@ -144,7 +144,7 @@ def test_dispatch_repo_rejects_bad_dir(tmp_path):
 def test_run_repl_eof_exits_immediately(tmp_path, monkeypatch):
     """A reader that immediately signals EOF should make the loop exit cleanly."""
     class EOFReader:
-        def read(self, _):
+        def read(self, _, toolbar=None):
             raise EOFError
 
     monkeypatch.setattr(repl, "_Reader", lambda: EOFReader())
