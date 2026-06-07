@@ -327,6 +327,45 @@ def contract_diff(
     raise typer.Exit(1)
 
 
+@app.command(name="gen-tests")
+def gen_tests(
+    file: str = typer.Argument(..., help="Source file to generate tests for (repo-relative)."),
+    path: str = typer.Option(".", "--path", "-p"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Write without confirming."),
+):
+    """Generate pytest tests for a source file using the local model."""
+    import ast as _ast
+
+    from .validate import test_gen
+    root = Path(path).resolve()
+    src = root / file
+    if not src.exists():
+        console.print(f"[red]no file:[/red] {file}")
+        raise typer.Exit(2)
+    cfg = load_config()
+    router = Router(Registry(cfg))
+    try:
+        code, _ = test_gen.generate_tests(file, src.read_text(encoding="utf-8"), router)
+    except RoutingError as e:
+        console.print(f"[red]model error:[/red] {e}")
+        raise typer.Exit(1)
+    try:
+        _ast.parse(code)
+    except SyntaxError as e:
+        console.print(f"[yellow]generated tests have a syntax error[/yellow]: {e}")
+    dest = root / test_gen.test_path_for(file)
+    console.print(f"[bold]{dest.relative_to(root)}[/bold]:\n")
+    console.print(code)
+    if not yes:
+        from rich.prompt import Confirm
+        if not Confirm.ask(f"\nWrite {dest.relative_to(root)}?", default=True):
+            console.print("[yellow]not written[/yellow]")
+            return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(code, encoding="utf-8")
+    console.print(f"[green]wrote {dest.relative_to(root)}[/green]")
+
+
 @app.command()
 def status(path: str = typer.Option(".", "--path", "-p")):
     """Doctor: config, model reachability, gate tools, git."""
