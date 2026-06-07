@@ -34,6 +34,7 @@ from .planning import blast_radius
 from .prove.audit import differential_audit, persist as persist_audit
 from .review import reviewer as reviewer_mod
 from .validate import safety_rules
+from .validate import test_runner
 from .validate.gate import run_gate
 
 
@@ -186,7 +187,7 @@ def _run_subtask(
 def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Console,
         files: list[str] | None = None, role_overrides: dict[str, str] | None = None,
         audit: bool = False, flags: set[str] | None = None,
-        contract: bool = True, review: bool = False) -> RunResult:
+        contract: bool = True, review: bool = False, test: bool = False) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
@@ -334,6 +335,22 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                 result.status = "applied"
         else:
             result.status = "applied" if applied else "gate_failed"
+
+        # Post-apply test runner with auto-rollback (V3).
+        if test and result.status == "applied":
+            cmd = test_runner.find_test_command(task_root, config.gate)
+            if not cmd:
+                console.print("[dim]no tests detected — skipping test runner[/dim]")
+            else:
+                console.print(f"[bold]Running tests[/bold]: {cmd}")
+                passed, out = test_runner.run_tests(task_root, cmd)
+                if passed:
+                    console.print("[green]tests passed[/green]")
+                else:
+                    for o in result.outcomes:
+                        ap.undo_from_snapshot(task_root, _snap_dir(task_root, session_id, o.subtask_id))
+                    result.status = "tests_failed"
+                    console.print(f"[red]tests failed → rolled back[/red]\n{out[-500:]}")
     finally:
         lock_mod.release(task_root, acquired, session_id)
 

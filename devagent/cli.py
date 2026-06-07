@@ -63,6 +63,7 @@ def run(
     flag: list[str] = typer.Option(None, "--flag", help="Grant a safety-rule flag (e.g. security-review). Repeatable."),
     contract: bool = typer.Option(True, "--contract/--no-contract", help="Contract-first for API tasks (spec → validate → conformance)."),
     review: bool = typer.Option(False, "--review", help="Reviewer agent checks each diff; a HIGH finding rolls it back."),
+    test: bool = typer.Option(False, "--test", help="Run the test suite after applying; auto-rollback on failure."),
 ):
     """Decompose a task into in-envelope subtasks, execute locally, gate, and apply."""
     overrides: dict[str, str] = {}
@@ -73,7 +74,7 @@ def run(
     try:
         result = pipeline.run(task, path, dry_run=dry_run, assume_yes=yes, console=console,
                               files=list(file or []), role_overrides=overrides, audit=audit,
-                              flags=set(flag or []), contract=contract, review=review)
+                              flags=set(flag or []), contract=contract, review=review, test=test)
     except RoutingError as e:
         console.print(f"\n[red]model error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")
