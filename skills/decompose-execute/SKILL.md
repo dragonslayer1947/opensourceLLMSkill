@@ -26,6 +26,12 @@ write this faster/better myself"* is exactly the impulse this skill exists to ov
 energy into a sharper decomposition, and let Qwen3.6 27B build it. Frontier execution of a piece is
 a last resort (Step 5), not the reflex.
 
+**You guarantee quality by VERIFYING, not by authoring.** You don't have to trust the local output
+blind — you check it: read the diff, confirm the gate passed (add `--review` for a model review of
+each diff), and confirm the goal is met (Step 6). That is your real job here — be the reviewer, not
+the writer. If a diff is wrong, the fix is to **re-decompose or re-run that piece**, never to
+hand-edit it yourself. Channel "I want this to be good" into review + sharper splitting.
+
 ## When to use vs. skip (be honest about the trade-off)
 **Use it** when the task would otherwise have you writing substantial code: a feature, a
 multi-file change, a refactor, or anything in a big repo. **Skip it** (just do it directly) for: a
