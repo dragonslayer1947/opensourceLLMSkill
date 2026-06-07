@@ -38,6 +38,7 @@ from .orchestration.classifier import classify
 from .planning import blast_radius
 from .prove.audit import differential_audit, persist as persist_audit
 from .review import reviewer as reviewer_mod
+from .ui import activity
 from .validate import migration_gate
 from .validate import safety_rules
 from .validate import test_runner
@@ -104,6 +105,7 @@ def _run_subtask(
     files: set[str] | None = None,
     rules: list | None = None, flags: set[str] | None = None,
     constraints: str = "", review: bool = False, enforce_patterns: list | None = None,
+    use_spinner: bool = True,
 ) -> SubtaskOutcome:
     env = config.envelope
     bundle = retrieve(
@@ -122,7 +124,8 @@ def _run_subtask(
         console.print(f"  [dim]domain: {domain}[/dim]")
         constraints = (constraints + "\n\nDOMAIN GUIDANCE:\n" + dguide).strip()
 
-    out = execute_subtask(subtask, bundle, router, constraints=constraints)
+    with activity(console, f"{subtask.id} · generating edits", enabled=use_spinner):
+        out = execute_subtask(subtask, bundle, router, constraints=constraints)
     result.calls.append(Call(out.model or "?", out.tier or "local", out.tokens_in, out.tokens_out, out.cost_usd))
 
     prepared = ap.prepare(task_root, out.edits)
@@ -154,16 +157,22 @@ def _run_subtask(
     changed = [c.path for c in prepared.changes]
     final_changes = prepared.changes
 
-    gate = run_gate(task_root, changed, config.gate)
+    with activity(console, f"{subtask.id} · verifying (gate)", enabled=use_spinner):
+        gate = run_gate(task_root, changed, config.gate)
     escalated = False
     if not gate.passed:
         console.print(f"  [yellow]gate failed[/yellow] on {subtask.id} → escalating")
-        guidance, model, tier, tin, tout, cost = get_correction(subtask, bundle, out.raw, gate.render(), router)
+        with activity(console, f"{subtask.id} · asking the frontier model for a fix",
+                      enabled=use_spinner):
+            guidance, model, tier, tin, tout, cost = get_correction(
+                subtask, bundle, out.raw, gate.render(), router)
         result.calls.append(Call(model or "?", tier or "cli", tin, tout, cost))
         escalated = True
         # roll back the failed attempt, then re-execute with guidance
         ap.undo_from_snapshot(task_root, snap)
-        out2 = execute_subtask(subtask, bundle, router, extra_guidance=guidance, constraints=constraints)
+        with activity(console, f"{subtask.id} · re-generating edits", enabled=use_spinner):
+            out2 = execute_subtask(subtask, bundle, router, extra_guidance=guidance,
+                                   constraints=constraints)
         result.calls.append(Call(out2.model or "?", out2.tier or "local", out2.tokens_in, out2.tokens_out, out2.cost_usd))
         prepared2 = ap.prepare(task_root, out2.edits)
         if prepared2.changes:
@@ -171,7 +180,8 @@ def _run_subtask(
             ap.write_changes(task_root, prepared2.changes)
             changed = [c.path for c in prepared2.changes]
             final_changes = prepared2.changes
-            gate = run_gate(task_root, changed, config.gate)
+            with activity(console, f"{subtask.id} · re-verifying (gate)", enabled=use_spinner):
+                gate = run_gate(task_root, changed, config.gate)
 
     if not gate.passed:
         console.print(f"  [red]gate still failing[/red] on {subtask.id}:\n{gate.render()}")
@@ -180,8 +190,9 @@ def _run_subtask(
 
     # Reviewer agent (V3) — an extra gate: a HIGH-severity finding rolls the subtask back.
     if review:
-        findings, meta = reviewer_mod.review_diff(
-            subtask.description, ap.unified_diff(final_changes), router)
+        with activity(console, f"{subtask.id} · reviewing the diff", enabled=use_spinner):
+            findings, meta = reviewer_mod.review_diff(
+                subtask.description, ap.unified_diff(final_changes), router)
         if meta:
             result.calls.append(Call(meta["model"] or "?", meta["tier"] or "cli",
                                      meta["tokens_in"], meta["tokens_out"], meta["cost_usd"]))
@@ -229,9 +240,9 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     result = RunResult(session_id=session_id, plan=Plan([], False, None))
     tr = trace_mod.new_trace(session_id, task)  # decision trail (devagent trace)
 
-    console.print(f"[bold]Indexing[/bold] {task_root} …")
-    index = build_index_cached(task_root)
-    console.print(f"  {len(index.files)} files indexed")
+    with activity(console, "Indexing the repo"):
+        index = build_index_cached(task_root)
+    console.print(f"[bold]Indexed[/bold] {len(index.files)} files")
     tr.record("index", files=len(index.files))
 
     bundle = retrieve(
@@ -270,7 +281,8 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     contract_doc = None
     if contract and contract_mod.is_api_task(task):
         try:
-            cr = contract_mod.generate_contract(task, bundle.render(), router)
+            with activity(console, "Drafting + validating the OpenAPI contract"):
+                cr = contract_mod.generate_contract(task, bundle.render(), router)
             result.calls.append(Call(cr.model or "?", cr.tier or "local",
                                      cr.tokens_in, cr.tokens_out, cr.cost_usd))
             if cr.spec and cr.valid:
@@ -286,13 +298,14 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
 
     console.print(f"[bold]Decomposing[/bold] (retrieved ~{bundle.est_tokens} ctx tokens, "
                   f"in-envelope={bundle.in_envelope}) …")
-    plan = decompose(
-        task, index, bundle, router,
-        max_subtask_files=int(config.envelope.get("max_subtask_files", 3)),
-        # Classifier may ESCALATE to decomposition; it never suppresses a structurally
-        # necessary one (large/windowed/multi-file still decompose via should_decompose).
-        force_decompose=(decision.route == "plan_execute"),
-    )
+    with activity(console, "Planning subtasks (consulting the planner)"):
+        plan = decompose(
+            task, index, bundle, router,
+            max_subtask_files=int(config.envelope.get("max_subtask_files", 3)),
+            # Classifier may ESCALATE to decomposition; it never suppresses a structurally
+            # necessary one (large/windowed/multi-file still decompose via should_decompose).
+            force_decompose=(decision.route == "plan_execute"),
+        )
     result.plan = plan
     tr.record("decompose", decomposed=plan.decomposed, n_subtasks=len(plan.subtasks),
               planner=plan.planner_model)
@@ -352,12 +365,13 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
             console.print(f"[red]session budget reached[/red]: {reason} — stopping")
         return bool(reason)
 
-    def _run_one(st: Subtask) -> SubtaskOutcome:
+    def _run_one(st: Subtask, use_spinner: bool = True) -> SubtaskOutcome:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
         t0 = time.monotonic()
         pre = len(result.calls)
         outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
-                               file_set, rules, flags, constraints, review, all_patterns)
+                               file_set, rules, flags, constraints, review, all_patterns,
+                               use_spinner=use_spinner)
         new_calls = result.calls[pre:]
         tr.record("subtask", id=st.id, status=outcome.status, files=outcome.changed_files,
                   escalated=outcome.escalated, duration_s=round(time.monotonic() - t0, 3),
@@ -379,8 +393,11 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                 if len(wave) == 1:
                     result.outcomes.append(_run_one(wave[0]))
                 else:
-                    with ThreadPoolExecutor(max_workers=len(wave)) as ex:
-                        for outcome in ex.map(_run_one, wave):
+                    # One live spinner per wave; per-subtask spinners off (only one live
+                    # display may be active, and the »-lines already narrate each subtask).
+                    with activity(console, f"wave {wi} · running {len(wave)} subtasks in parallel"), \
+                            ThreadPoolExecutor(max_workers=len(wave)) as ex:
+                        for outcome in ex.map(lambda s: _run_one(s, use_spinner=False), wave):
                             result.outcomes.append(outcome)
                 _save_session(task_root, result, task)
             _consistency_check(result, console)
@@ -414,7 +431,8 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                 console.print("[dim]no tests detected — skipping test runner[/dim]")
             else:
                 console.print(f"[bold]Running tests[/bold]: {cmd}")
-                passed, out = test_runner.run_tests(task_root, cmd)
+                with activity(console, "Running the test suite"):
+                    passed, out = test_runner.run_tests(task_root, cmd)
                 if passed:
                     console.print("[green]tests passed[/green]")
                 else:
@@ -445,7 +463,8 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     if audit and result.status == "applied":
         console.print("\n[bold]Quality audit[/bold] (local vs frontier)…")
         try:
-            ar = differential_audit(task, path, config, registry, router)
+            with activity(console, "Auditing parity vs the frontier model"):
+                ar = differential_audit(task, path, config, registry, router)
             persist_audit(config.db_path, ar, run_kind="audit", run_id=result.session_id)
             if ar.verdict == "skipped":
                 console.print(f"  [yellow]skipped[/yellow]: {ar.reason}")

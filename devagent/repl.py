@@ -183,8 +183,10 @@ def _do_ask(session: Session, question: str, console: Console) -> None:
     system = ("You answer questions about THIS codebase for a senior engineer. Be concise and "
               "concrete, cite file paths. You are READ-ONLY: do not propose edits unless asked.")
     user = f"REPO CONTEXT (retrieved):\n{bundle.render()}\n\nQUESTION: {question}"
+    from .ui import activity
     try:
-        res = session.router.complete("executor", system, user, max_tokens=800)  # type: ignore[union-attr]
+        with activity(console, "Thinking"):
+            res = session.router.complete("executor", system, user, max_tokens=800)  # type: ignore[union-attr]
     except RoutingError as e:
         console.print(f"[red]model error:[/red] {e}")
         return
