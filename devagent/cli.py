@@ -222,6 +222,43 @@ def verify(
 
 
 @app.command()
+def rename(
+    old: str = typer.Argument(..., help="Identifier to rename (function/class/variable)."),
+    new: str = typer.Argument(..., help="New identifier."),
+    path: str = typer.Option(".", "--path", "-p"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirm."),
+):
+    """Atomic cross-cutting rename (Tier-1 #3): rewrite an identifier repo-wide — tokenizer-accurate
+    for Python (strings/comments untouched), word-boundary for JS/TS — gate the whole set, and roll
+    back ALL files if anything fails. All-or-nothing: no half-renamed tree can exist."""
+    from datetime import datetime as _dt
+
+    from .execute import atomic_rename
+    root = Path(path).resolve()
+    cfg = load_config()
+    changes = atomic_rename.plan_rename(root, old, new)
+    if not changes:
+        console.print(f"[dim]no occurrences of `{old}` found[/dim]")
+        return
+    console.print(f"[bold]rename[/bold] `{old}` → `{new}` across {len(changes)} file(s):")
+    for c in changes:
+        console.print(f"  {c.path}  [dim]({c.reason})[/dim]")
+    if not yes:
+        from rich.prompt import Confirm
+        if not Confirm.ask("Apply atomically (rolls back ALL if the gate fails)?", default=True):
+            console.print("[yellow]cancelled[/yellow]")
+            return
+    snap = root / ".devagent" / "snapshots" / f"rename-{_dt.now().strftime('%Y%m%d-%H%M%S')}"
+    res = atomic_rename.apply_rename(root, old, new, cfg.gate, snap)
+    if res.ok:
+        console.print(f"[green]✓ renamed {res.occurrences} occurrence(s) across "
+                      f"{len(res.changed)} file(s)[/green] — gate passed")
+    else:
+        console.print(f"[red]rename rolled back[/red] (gate/interface failed):\n{res.output[-800:]}")
+        raise typer.Exit(1)
+
+
+@app.command()
 def cost():
     """Show cumulative cost savings (actual vs all-frontier counterfactual)."""
     report.show_cost(load_config(), console)

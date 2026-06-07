@@ -106,7 +106,12 @@ surfaces structural gaps (a depended-on subtask with no `provides`; the same fil
 unordered subtasks) and asks the planner for any missing required steps. If it flags gaps, fix the
 plan (Step 2/3) before proceeding — an incomplete plan is silent under-delivery. A **cross-cutting
 change** (a wide rename / signature change) is detected and a coordination directive is injected
-into every subtask so they apply it identically.
+into every subtask so they apply it identically. For a pure repo-wide **rename**, prefer the
+deterministic, all-or-nothing `devagent rename <old> <new> -p <repo>` (tokenizer-accurate, gated,
+rolls back every file if anything breaks) over decomposition. With `--review`, a final
+**whole-changeset-vs-intent** check confirms the pieces together achieve the goal (a HIGH finding
+rolls the run back). Prior runs' changes are auto-recalled (continuity memory) so new work builds
+on established interfaces.
 
 The local model implements each subtask; the gate verifies each; failures escalate automatically.
 

@@ -30,6 +30,7 @@ from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .knowledge import adr
 from .knowledge import compliance
+from .knowledge import continuity
 from .knowledge import incidents as incidents_mod
 from .knowledge import pattern_registry
 from .knowledge import service_graph, service_registry
@@ -356,6 +357,14 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         constraints = (constraints + "\n\nPAST INCIDENTS (do not repeat):\n"
                        + incidents_mod.lessons_context(relevant_incidents)).strip()
 
+    # Continuity memory (gap #6): inject what prior runs changed in these files, so this run
+    # builds ON the established interfaces instead of contradicting them.
+    cmem = continuity.recent_context(task_root, bundle.candidate_files)
+    if cmem:
+        console.print("[dim]continuity: recalled prior changes to these files[/dim]")
+        constraints = (constraints + "\n\nRECENT CHANGES IN THIS REPO (build on these, do not "
+                       "contradict their interfaces):\n" + cmem).strip()
+
     if from_plan:
         # Execute a previously-reviewed plan verbatim — no routing, no re-decomposition.
         from .planning import plan_store
@@ -635,6 +644,31 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                 result.status = "behavior_changed"
                 console.print(f"[red]characterization FAILED — behavior changed → rolled back[/red]"
                               f"\n{cout[-700:]}")
+
+        # Whole-changeset-vs-intent review (gap #8): do the pieces TOGETHER achieve the goal and
+        # cohere? Per-subtask review can't see this. A HIGH finding rolls the whole run back.
+        applied_outcomes = [o for o in result.outcomes if o.status == "applied"]
+        if review and result.status == "applied" and len(applied_outcomes) > 1:
+            files = sorted({f for o in applied_outcomes for f in o.changed_files})
+            changeset = "\n\n".join(
+                f"=== {f} ===\n{(task_root / f).read_text(encoding='utf-8', errors='replace')[:4000]}"
+                for f in files if (task_root / f).exists())
+            summaries = [f"{o.subtask_id}: {o.description}" for o in applied_outcomes]
+            with activity(console, "Reviewing the whole change-set against the goal"):
+                cfindings, cmeta = reviewer_mod.review_changeset(task, changeset, summaries, router)
+            if cmeta:
+                result.calls.append(Call(cmeta["model"] or "?", cmeta["tier"] or "cli",
+                                         cmeta["tokens_in"], cmeta["tokens_out"], cmeta["cost_usd"]))
+            for fnd in cfindings:
+                color = {"high": "red", "medium": "yellow", "low": "dim"}[fnd.severity]
+                console.print(f"  [{color}]changeset/{fnd.severity}[/{color}] "
+                              f"{fnd.category}: {fnd.message}")
+            if reviewer_mod.has_blocking(cfindings):
+                for o in result.outcomes:
+                    ap.undo_from_snapshot(task_root, _snap_dir(task_root, session_id, o.subtask_id))
+                result.status = "changeset_rejected"
+                console.print("[red]whole-changeset review: goal not met / pieces don't fit → "
+                              "rolled back[/red]")
     finally:
         lock_mod.release(task_root, acquired, session_id)
 
@@ -666,6 +700,14 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
 
     _record(config, task, result)
     _save_session(task_root, result, task)
+
+    # Continuity memory (gap #6): record what this run changed so future runs build on it.
+    if result.status == "applied":
+        continuity.record(
+            task_root, task=task,
+            files=sorted({f for o in result.outcomes for f in o.changed_files}),
+            provides=[p for s in result.plan.subtasks for p in s.provides],
+            session_id=session_id)
 
     if audit and result.status == "applied":
         console.print("\n[bold]Quality audit[/bold] (local vs frontier)…")
