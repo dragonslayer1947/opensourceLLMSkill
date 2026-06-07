@@ -26,6 +26,7 @@ from .knowledge import adr
 from .knowledge import pattern_registry
 from .models.registry import Registry
 from .models.router import Router
+from .orchestration.classifier import classify
 from .planning import blast_radius
 from .prove.audit import differential_audit, persist as persist_audit
 from .validate import safety_rules
@@ -195,11 +196,24 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     if not bundle.views:
         console.print("[yellow]no existing files matched the task[/yellow] — new files will be "
                       "created. Pass --file <path> to target existing code explicitly.")
+
+    # Routing classifier — decide direct vs plan→execute up front (free, deterministic).
+    max_ctx = int(config.envelope.get("max_context_tokens", 12000))
+    has_pattern = bool(pattern_registry.relevant(
+        pattern_registry.load_patterns(task_root), task))
+    decision = classify(task, in_envelope=bundle.in_envelope, est_tokens=bundle.est_tokens,
+                        max_context_tokens=max_ctx, has_pattern=has_pattern)
+    console.print(f"[bold]Routing[/bold]: {decision.route} (score {decision.score}"
+                  + (f" — {', '.join(decision.reasons)}" if decision.reasons else "") + ")")
+
     console.print(f"[bold]Decomposing[/bold] (retrieved ~{bundle.est_tokens} ctx tokens, "
                   f"in-envelope={bundle.in_envelope}) …")
     plan = decompose(
         task, index, bundle, router,
         max_subtask_files=int(config.envelope.get("max_subtask_files", 3)),
+        # Classifier may ESCALATE to decomposition; it never suppresses a structurally
+        # necessary one (large/windowed/multi-file still decompose via should_decompose).
+        force_decompose=(decision.route == "plan_execute"),
     )
     result.plan = plan
     if plan.decomposed:

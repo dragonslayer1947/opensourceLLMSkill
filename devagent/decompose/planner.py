@@ -101,8 +101,9 @@ def decompose(
     *,
     max_subtask_files: int,
     force_direct: bool = False,
+    force_decompose: bool = False,
 ) -> Plan:
-    if force_direct or not should_decompose(bundle, max_subtask_files):
+    if force_direct or (not force_decompose and not should_decompose(bundle, max_subtask_files)):
         return Plan(
             subtasks=[Subtask(id="s1", description=task, target_files=bundle.candidate_files[:1])],
             decomposed=False,
