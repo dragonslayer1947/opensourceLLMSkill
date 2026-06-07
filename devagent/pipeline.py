@@ -25,6 +25,7 @@ from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .knowledge import adr
 from .knowledge import pattern_registry
+from .knowledge import service_graph, service_registry
 from .models.registry import Registry
 from .models.router import Router
 from .orchestration.classifier import classify
@@ -255,6 +256,16 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         )
         color = {"low": "green", "medium": "yellow", "high": "red"}[br.level]
         console.print(f"[{color}]{br.render()}[/{color}]")
+
+        # Service-level blast radius (V2) — which downstream services may be affected.
+        svcs = service_registry.load_services(task_root)
+        if svcs:
+            for sname in sorted(service_graph.services_for_paths(svcs, planned)):
+                down = service_graph.transitive_downstream(svcs, sname)
+                if down:
+                    console.print(f"[yellow]service blast radius[/yellow]: {sname} → "
+                                  f"may affect {', '.join(sorted(down))}")
+
         if br.level == "high" and not assume_yes and not dry_run:
             from rich.prompt import Confirm
             if not Confirm.ask("High blast radius — proceed?", default=False):

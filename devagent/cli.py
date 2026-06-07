@@ -212,8 +212,10 @@ def service(
     console.print(f"[bold]{s.name}[/bold]  team={s.team}  sla={s.sla_tier}")
     console.print(f"  tech: {', '.join(s.tech_stack) or '—'}")
     console.print(f"  compliance: {', '.join(s.compliance_zones) or '—'}")
+    from .knowledge import service_graph as sg
     console.print(f"  consumes: {', '.join(s.consumes_names) or '—'}")
-    console.print(f"  consumed by: {', '.join(sr.downstream_consumers(svcs, name)) or '—'}")
+    console.print(f"  consumed by (direct): {', '.join(sr.downstream_consumers(svcs, name)) or '—'}")
+    console.print(f"  downstream (transitive): {', '.join(sorted(sg.transitive_downstream(svcs, name))) or '—'}")
     console.print(f"  events out/in: {', '.join(s.events_produces) or '—'} / "
                   f"{', '.join(s.events_consumes) or '—'}")
     console.print(f"  owns dbs: {', '.join(s.dbs_owned) or '—'}")

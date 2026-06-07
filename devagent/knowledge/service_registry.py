@@ -39,6 +39,8 @@ class Service:
     name: str
     team: str = ""
     sla_tier: str = "standard"
+    root: str = ""                    # repo-relative dir this service owns (for file→service mapping)
+    produces_specs: list[str] = field(default_factory=list)  # produced OpenAPI spec paths
     tech_stack: list[str] = field(default_factory=list)
     compliance_zones: list[str] = field(default_factory=list)
     consumes: list[dict] = field(default_factory=list)        # [{service, version_pin}]
@@ -56,10 +58,14 @@ def _parse(data: dict) -> Service:
     apis = data.get("apis", {}) or {}
     events = data.get("events", {}) or {}
     dbs = data.get("databases", {}) or {}
+    produces_specs = [str(p.get("spec")) for p in (apis.get("produces", []) or [])
+                      if isinstance(p, dict) and p.get("spec")]
     return Service(
         name=str(data.get("name", "?")),
         team=str(data.get("team", "")),
         sla_tier=str(data.get("sla_tier", "standard")),
+        root=str(data.get("root", "")),
+        produces_specs=produces_specs,
         tech_stack=list(data.get("tech_stack", []) or []),
         compliance_zones=list(data.get("compliance_zones", []) or []),
         consumes=list(apis.get("consumes", []) or []),
