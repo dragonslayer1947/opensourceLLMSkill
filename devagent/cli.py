@@ -698,5 +698,315 @@ def _probe_http(base_url: str | None) -> bool:
         return False
 
 
+# ── V5: autonomous long-horizon ────────────────────────────────────────────────────────────
+
+def _repo_skeleton(root: Path, limit: int = 30) -> str:
+    """A compact signature map of the repo — fed to the planner for epic/proposal context."""
+    from .context.cache import build_index_cached
+    index = build_index_cached(root)
+    out = []
+    for f in index.files[:limit]:
+        out.append(f"## {f.rel} ({f.lines} lines)")
+        for s in f.symbols[:12]:
+            out.append(f"  {s.signature}")
+    return "\n".join(out)
+
+
+epic_app = typer.Typer(no_args_is_help=True, help="Long-horizon epics (epic → story → task).")
+app.add_typer(epic_app, name="epic")
+
+
+@epic_app.command("plan")
+def epic_plan(
+    goal: str = typer.Argument(..., help="The long-horizon goal to decompose."),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Decompose a goal into an epic → story → task tree (frontier planner) and save it."""
+    from .longhorizon import epic as epic_mod
+    root = Path(path).resolve()
+    cfg = load_config()
+    router = Router(Registry(cfg))
+    eid = epic_mod.next_epic_id(root)
+    console.print(f"[bold]Planning[/bold] {eid}: {goal}")
+    try:
+        epic = epic_mod.decompose_epic(
+            eid, goal, router,
+            max_subtask_files=int(cfg.envelope.get("max_subtask_files", 3)),
+            skeleton=_repo_skeleton(root))
+    except RoutingError as e:
+        console.print(f"[red]model error:[/red] {e}")
+        raise typer.Exit(1)
+    epic_mod.save_epic(root, epic)
+    console.print(f"[green]saved[/green] {epic_mod.epic_path(root, eid)} — "
+                  f"{len(epic.stories())} stories, {len(epic.tasks())} tasks "
+                  f"(planner: {epic.planner_model})")
+
+
+@epic_app.command("list")
+def epic_list(path: str = typer.Option(".", "--path", "-p")):
+    """List epics with progress."""
+    from .longhorizon import epic as epic_mod
+    from .longhorizon import runner
+    root = Path(path).resolve()
+    epics = epic_mod.list_epics(root)
+    if not epics:
+        console.print("[dim]no epics — run `devagent epic plan \"<goal>\"`[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    for c in ("id", "progress", "tasks", "goal"):
+        table.add_column(c)
+    for e in epics:
+        st = runner.load_state(root, e)
+        pr = runner.progress(e, st)
+        table.add_row(e.id, f"{pr['pct']}%", f"{pr['done']}/{pr['tasks']}", e.goal[:50])
+    console.print(table)
+
+
+@epic_app.command("show")
+def epic_show(
+    epic_id: str = typer.Argument(...),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Show an epic's tree with per-node status."""
+    from .longhorizon import epic as epic_mod
+    from .longhorizon import runner
+    root = Path(path).resolve()
+    epic = epic_mod.load_epic(root, epic_id)
+    if not epic:
+        console.print(f"[yellow]no epic '{epic_id}'[/yellow]")
+        raise typer.Exit(1)
+    state = runner.load_state(root, epic)
+    _color = {"done": "green", "in_progress": "cyan", "failed": "red",
+              "blocked": "yellow", "pending": "dim"}
+    console.print(f"[bold]{epic.id}[/bold] — {epic.goal}")
+    for story in epic.stories():
+        s = runner.status_of(state, story.id)
+        console.print(f"  [{_color[s]}]●[/{_color[s]}] {story.id} {story.title} [dim]({s})[/dim]")
+        for task in epic.children_of(story.id):
+            ts = runner.status_of(state, task.id)
+            dep = f" ⟵ {', '.join(task.depends_on)}" if task.depends_on else ""
+            console.print(f"      [{_color[ts]}]○[/{_color[ts]}] {task.id} {task.title}"
+                          f" [dim]({ts}){dep}[/dim]")
+
+
+@epic_app.command("conflicts")
+def epic_conflicts(
+    epic_id: str = typer.Argument(...),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Predict file / coupling / reservation conflicts across the epic's tasks."""
+    from .context.cache import build_index_cached
+    from .longhorizon import conflict, epic as epic_mod, reservation
+    root = Path(path).resolve()
+    epic = epic_mod.load_epic(root, epic_id)
+    if not epic:
+        console.print(f"[yellow]no epic '{epic_id}'[/yellow]")
+        raise typer.Exit(1)
+    index = build_index_cached(root)
+    res = [r.to_dict() for r in reservation.active(root)]
+    conflicts = conflict.detect(epic.tasks(), index=index, reservations=res)
+    if not conflicts:
+        console.print("[green]no predicted conflicts[/green]")
+        return
+    for c in conflicts:
+        color = "red" if c.severity == "block" else "yellow"
+        console.print(f"[{color}]{c.render()}[/{color}]")
+    if conflict.has_blocking(conflicts):
+        raise typer.Exit(1)
+
+
+@epic_app.command("run")
+def epic_run(
+    epic_id: str = typer.Argument(...),
+    path: str = typer.Option(".", "--path", "-p"),
+    max_tasks: int = typer.Option(0, "--max-tasks", help="Stop after N tasks this session (0 = all ready)."),
+    review: bool = typer.Option(False, "--review"),
+    test: bool = typer.Option(False, "--test"),
+):
+    """Run the epic's ready tasks via the full pipeline, checkpointing after each (resumable)."""
+    from .longhorizon import epic as epic_mod
+    from .longhorizon import runner
+    root = Path(path).resolve()
+    epic = epic_mod.load_epic(root, epic_id)
+    if not epic:
+        console.print(f"[yellow]no epic '{epic_id}'[/yellow]")
+        raise typer.Exit(1)
+
+    def _execute(task) -> tuple[bool, str]:
+        try:
+            res = pipeline.run(task.description or task.title, str(root), dry_run=False,
+                               assume_yes=True, console=console,
+                               files=list(task.target_files or []), review=review, test=test)
+        except RoutingError as e:
+            return False, f"model error: {e}"
+        return res.status == "applied", res.status
+
+    def _event(kind: str, detail: dict):
+        if kind == "start":
+            console.print(f"\n[bold cyan]» {detail['task'].id}[/bold cyan] {detail['task'].title}")
+        elif kind == "finish":
+            mark = "[green]✓[/green]" if detail["ok"] else "[red]✗[/red]"
+            console.print(f"  {mark} {detail['task'].id}: {detail['note']}")
+
+    summary = runner.run_epic(root, epic, _execute,
+                              max_tasks=(max_tasks or None), on_event=_event)
+    console.print(f"\n[bold]Epic {epic_id}[/bold]: {summary['done']}/{summary['tasks']} tasks done"
+                  f" ({summary['pct']}%), {summary['failed']} failed, ran {summary['ran']} this run")
+
+
+@epic_app.command("sync")
+def epic_sync(
+    epic_id: str = typer.Argument(...),
+    path: str = typer.Option(".", "--path", "-p"),
+    provider: str = typer.Option(None, "--provider", help="Override: null | github | jira | slack."),
+):
+    """Push the epic + stories to the org tracker (one issue each); idempotent."""
+    from .integrations import registry, sync
+    from .longhorizon import epic as epic_mod
+    root = Path(path).resolve()
+    epic = epic_mod.load_epic(root, epic_id)
+    if not epic:
+        console.print(f"[yellow]no epic '{epic_id}'[/yellow]")
+        raise typer.Exit(1)
+    prov = registry.get_provider(load_config(), root, override=provider)
+    console.print(f"[bold]Syncing[/bold] {epic_id} via [bold]{prov.name}[/bold] provider")
+    mapping = sync.sync_epic(root, epic, prov)
+    for node_id, ref in mapping.items():
+        console.print(f"  {node_id} → {ref.get('external_id')} {ref.get('url', '')}")
+
+
+@app.command()
+def reserve(
+    resource: str = typer.Argument(..., help="Resource string, e.g. service:payments or file:api.py."),
+    owner: str = typer.Option(..., "--owner", "-o", help="Team or person holding the reservation."),
+    ttl_hours: float = typer.Option(48, "--ttl", help="Reservation lifetime in hours."),
+    note: str = typer.Option("", "--note", "-n"),
+    release: bool = typer.Option(False, "--release", help="Release instead of acquire."),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Reserve (or release) a shared resource for cross-team coordination."""
+    import time as _time
+    from .longhorizon import reservation
+    root = Path(path).resolve()
+    if release:
+        ok = reservation.release(root, resource, owner)
+        console.print(f"[green]released[/green] {resource}" if ok
+                      else f"[yellow]not released[/yellow] (not held by {owner})")
+        return
+    res, conflict = reservation.reserve(root, resource, owner, reservation.default_session(),
+                                        ttl_seconds=int(ttl_hours * 3600), note=note)
+    if conflict:
+        expires = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(conflict.expires_at()))
+        console.print(f"[red]conflict[/red]: {resource} reserved by "
+                      f"[bold]{conflict.owner}[/bold] until {expires}")
+        raise typer.Exit(1)
+    console.print(f"[green]reserved[/green] {res.resource} for {res.owner} ({ttl_hours:g}h)")
+
+
+@app.command()
+def reservations(path: str = typer.Option(".", "--path", "-p")):
+    """List active cross-team reservations."""
+    import time as _time
+    from .longhorizon import reservation
+    root = Path(path).resolve()
+    active = reservation.active(root)
+    if not active:
+        console.print("[dim]no active reservations[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    for c in ("resource", "owner", "expires", "note"):
+        table.add_column(c)
+    for r in active:
+        table.add_row(r.resource, r.owner,
+                      _time.strftime("%Y-%m-%d %H:%M", _time.localtime(r.expires_at())),
+                      r.note[:40])
+    console.print(table)
+
+
+@app.command()
+def propose(
+    goal: str = typer.Argument(None, help="Goal to propose an architecture for (omit with --list/--approve)."),
+    path: str = typer.Option(".", "--path", "-p"),
+    list_all: bool = typer.Option(False, "--list", help="List proposals and their status."),
+    approve: str = typer.Option(None, "--approve", help="Approve proposal id (promotes it to an ADR)."),
+    reject: str = typer.Option(None, "--reject", help="Reject proposal id."),
+    reviewer: str = typer.Option("", "--reviewer", help="Who approved/rejected."),
+):
+    """Autonomous architectural proposal behind a human approval gate."""
+    from .longhorizon import proposal
+    root = Path(path).resolve()
+
+    if list_all:
+        props = proposal.load_proposals(root)
+        if not props:
+            console.print("[dim]no proposals[/dim]")
+            return
+        table = Table(show_header=True, header_style="bold")
+        for c in ("id", "status", "title"):
+            table.add_column(c)
+        for p in props:
+            color = {"approved": "green", "rejected": "red", "proposed": "yellow"}[p.status]
+            table.add_row(p.id, f"[{color}]{p.status}[/{color}]", p.title[:60])
+        console.print(table)
+        return
+
+    if approve or reject:
+        pid = approve or reject
+        decision = "approved" if approve else "rejected"
+        p = proposal.set_decision(root, pid, decision, reviewer)
+        if not p:
+            console.print(f"[yellow]no proposal '{pid}'[/yellow]")
+            raise typer.Exit(1)
+        console.print(f"[bold]{pid}[/bold] → {decision}")
+        if decision == "approved":
+            adr_path = proposal.promote_to_adr(root, p)
+            console.print(f"[green]promoted to ADR[/green]: {adr_path}")
+        return
+
+    if not goal:
+        console.print("[yellow]give a goal, or use --list / --approve / --reject[/yellow]")
+        raise typer.Exit(2)
+    cfg = load_config()
+    router = Router(Registry(cfg))
+    console.print(f"[bold]Proposing[/bold] architecture for: {goal}")
+    try:
+        p = proposal.propose(root, goal, router, skeleton=_repo_skeleton(root))
+    except RoutingError as e:
+        console.print(f"[red]model error:[/red] {e}")
+        raise typer.Exit(1)
+    console.print(f"[bold]{p.id}[/bold] ({p.status}) — {p.title}")
+    console.print(f"  decision: {p.decision}")
+    for c in p.constraints:
+        console.print(f"  constraint ({c.get('severity', 'warn')}): {c.get('rule', '')}")
+    console.print(f"[dim]approve with: devagent propose --approve {p.id}[/dim]")
+
+
+@app.command()
+def trace(
+    session: str = typer.Argument(None, help="Session id (default: latest)."),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Show the decision trail for a run: routing, context, rules, blast radius, per-subtask cost/time."""
+    from .observability import trace as trace_mod
+    root = Path(path).resolve()
+    sid = session or trace_mod.latest(root)
+    if not sid:
+        console.print("[dim]no traces recorded yet[/dim]")
+        return
+    data = trace_mod.load_trace(root, sid)
+    if not data:
+        console.print(f"[yellow]no trace for session '{sid}'[/yellow]")
+        raise typer.Exit(1)
+    console.print(f"[bold]trace {sid}[/bold] — {data.get('task', '')[:70]}")
+    for e in data.get("events", []):
+        d = e.get("detail", {})
+        kv = ", ".join(f"{k}={v}" for k, v in d.items() if k not in ("files", "candidates"))
+        console.print(f"  [dim]{e.get('elapsed_s', 0):>6.2f}s[/dim] [cyan]{e.get('kind')}[/cyan]  {kv}")
+    summ = trace_mod.summarize(data)
+    console.print(f"[bold]subtasks[/bold]: {len(summ['subtasks'])}  "
+                  f"blast={summ['blast_radius'].get('level', '—')}  "
+                  f"total cost ${summ['total_cost']:.4f}")
+
+
 if __name__ == "__main__":
     app()

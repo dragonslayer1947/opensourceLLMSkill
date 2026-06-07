@@ -100,6 +100,20 @@ test_command = "pytest -q"
 [compliance]
 profiles = []                          # e.g. ["pci-dss", "soc2", "hipaa"] — merged into safety rules
 
+# ── Org-workflow integration (V5). Default "null" = offline: intents are written to ──
+# ── .devagent/integrations/outbox.jsonl, no network. Set a provider + creds to go live. ──
+[integrations]
+provider = "null"                      # null | github | jira | slack
+# [integrations.github]
+# repo = "owner/name"                  # blank => gh infers from the repo's cwd
+# [integrations.jira]
+# base_url  = "https://acme.atlassian.net"
+# project   = "ORD"
+# email     = "bot@acme.com"           # set for Atlassian Cloud (basic auth); omit for PAT
+# token_env = "JIRA_API_TOKEN"
+# [integrations.slack]
+# webhook_env = "SLACK_WEBHOOK_URL"
+
 [reporting]
 counterfactual_model = "claude-cli"    # frontier model the savings/audit are measured against
 audit_sample_rate    = 0.1             # fraction of tasks the quality audit samples
