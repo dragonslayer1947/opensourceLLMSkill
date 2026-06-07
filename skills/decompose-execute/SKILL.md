@@ -6,9 +6,25 @@ description: Use when a coding task is substantial — a new feature, a change s
 # Decompose-Execute — plan with the strong model, build with the local one
 
 On an in-scope task your job is to **decompose, orchestrate, and verify — not to write the
-implementation yourself.** A cheap local model writes each subtask's code via `devagent`; a
+implementation yourself.** A capable local model writes each subtask's code via `devagent`; a
 deterministic gate (types → lint → security → tests) checks each one. You do the small, high-value
 planning; the local model does the token-heavy generation at ~$0.
+
+## Hard decomposition is MANDATORY — and the local model is strong enough
+Every in-scope task **MUST** be decomposed before any code is written. There is no "this one is
+simpler, I'll just do it myself." Decompose **hard**: keep splitting until each subtask is small
+and unambiguous enough to implement correctly in a single shot.
+
+**Trust the executor.** The local model is **Qwen3.6 27B with a 128K-context window** — a strong
+coding model that is at parity with frontier models on well-scoped changes, and whose large
+context window lets it take a generous, precise slice of the repo per subtask. A properly
+decomposed subtask is well within its ability.
+
+So when a subtask fails, the correct conclusion is **"the subtask was too big or too vague" →
+split it further** — NOT "the model is too weak, I'll take over." Your instinct that *"I could just
+write this faster/better myself"* is exactly the impulse this skill exists to override: convert that
+energy into a sharper decomposition, and let Qwen3.6 27B build it. Frontier execution of a piece is
+a last resort (Step 5), not the reflex.
 
 ## When to use vs. skip (be honest about the trade-off)
 **Use it** when the task would otherwise have you writing substantial code: a feature, a
@@ -22,9 +38,9 @@ isn't worth the overhead there. If another planning skill is already driving the
 2. Read the **execution** section:
    - **local executor reachable** → proceed; execution runs locally (~$0).
    - **unreachable** → tell the user plainly: *execution will fall back to the frontier model, so
-     there will be NO real cost savings.* Give the fix (`ollama serve` + `ollama pull
-     qwen2.5-coder:7b`; set `base_url=http://localhost:11434/v1`, `model_id=qwen2.5-coder:7b`) and
-     ask whether to wait or proceed anyway.
+     there will be NO real cost savings.* Give the fix (start the local server — e.g. llama.cpp
+     serving **Qwen3.6 27B** at `http://localhost:8080/v1`, or Ollama — and point
+     `[models.qwen-local]` at it) and ask whether to wait or proceed anyway.
 3. Ensure the working tree is **clean (committed)** first, so a partial run is easy to review/undo.
    Make sure `.devagent/sessions/`, `snapshots/`, `locks/`, `cache/`, `traces/`, `cli_io/` are
    gitignored (runtime artifacts); knowledge dirs (`adrs/`, `patterns.yaml`, `rules.yaml`) may be
@@ -36,8 +52,11 @@ how it decomposes). If the task is **ambiguous or under-specified, ask the user 
 a plan built on a guess wastes a whole run.
 
 ## Step 2 — Decompose (you do this)
-Break the task into the smallest safe, ordered subtasks. Each subtask MUST:
-- touch **≤ 3 files**, be **one coherent change**, with a clear, testable outcome;
+Break the task into the smallest safe, ordered subtasks — decompose hard (see the principle
+above). Each subtask MUST:
+- touch **≤ 3 files**, be **one coherent change**, with a clear, testable outcome that
+  **Qwen3.6 27B (128K ctx) can implement from the retrieved slice** — if you doubt it can, the
+  piece is still too big: split again;
 - list `target_files` and `depends_on` (ids that must finish first);
 - **carry the interface it shares with other subtasks in its description.** If `s1` defines
   `OrderRepo.create(order) -> Order`, then `s2`'s description must state that exact signature so the
@@ -73,13 +92,17 @@ Add the engine's own safety levers when warranted:
 
 The local model implements each subtask; the gate verifies each; failures escalate automatically.
 
-## Step 5 — Handle a subtask the local model can't do
-If a subtask still fails the gate after the automatic escalation, do **one** of:
-- **split it** into smaller pieces and re-import, or
-- **route just that piece to the frontier**: `devagent run "<that subtask>" -f <files>
-  --executor claude-cli --yes -p <repo>` (keeps the rest on local).
+## Step 5 — When a subtask fails the gate: split first, escalate last
+A gate failure is almost always a **decomposition problem, not a model problem** — Qwen3.6 27B can
+implement well-scoped work. So, in order:
+1. **Split it further** into smaller, sharper subtasks and re-import — this resolves the large
+   majority of failures and keeps the work (and the savings) on the local model.
+2. Only if a piece is **genuinely frontier-hard** (novel algorithm, subtle cross-cutting design)
+   after splitting, route *that one piece* to the frontier:
+   `devagent run "<that subtask>" -f <files> --executor claude-cli --yes -p <repo>`.
 
-Do **not** silently take over and hand-write it — surface the gate output to the user first.
+**NEVER** silently take over and hand-write it because the local model "isn't getting it" — split
+and retry, and surface the gate output to the user. Taking over is the failure mode, not the fix.
 
 ## Step 6 — Verify the goal (not just the gate)
 The gate proves each piece compiles/passes; it does **not** prove the *task* is done. After the run,
@@ -95,7 +118,10 @@ Report:
    If `Y% local` is 0, say plainly that nothing ran locally (local model down) → no savings.
 
 ## Hard rules
+- **ALWAYS decompose (hard)** an in-scope task — never skip planning because it "seems simple
+  enough to just do." Split until each piece fits Qwen3.6 27B.
 - **NEVER** hand-write implementation for an in-scope task — route it through `devagent`.
+- A failing subtask means **split further**, not take over — trust the 27B on well-scoped pieces.
 - **ALWAYS** report savings + `% local`, with the caveat above. Don't claim "100% local" for the
   whole task — it's execution-only.
 - **VERIFY the goal**, not just the gate, before calling it done.

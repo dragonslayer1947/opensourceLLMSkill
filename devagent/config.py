@@ -22,7 +22,7 @@ DEFAULT_CONFIG_TOML = """\
 [models.qwen-local]
 protocol  = "openai-compat"            # any OpenAI-compatible local server
 base_url  = "http://localhost:8080/v1"
-model_id  = "qwen3-27b"
+model_id  = "qwen3.6-27b"              # Qwen3.6 27B, 128K context — strong on well-scoped subtasks
 tier      = "local"                    # local => ~$0
 timeout_s = 180
 api_key_env = ""                       # local servers need no key
