@@ -22,6 +22,7 @@ from .decompose.planner import Plan, Subtask, decompose
 from .execute import apply as ap
 from .execute import contract as contract_mod
 from .execute import lock as lock_mod
+from .execute import specialized
 from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .knowledge import adr
@@ -109,6 +110,12 @@ def _run_subtask(
     )
     if not bundle.in_envelope:
         result.in_envelope = False
+
+    # Specialized agent: add domain-specific guidance (infra/migration/frontend/api).
+    domain, dguide = specialized.guidance_for(subtask.description, subtask.target_files)
+    if dguide:
+        console.print(f"  [dim]domain: {domain}[/dim]")
+        constraints = (constraints + "\n\nDOMAIN GUIDANCE:\n" + dguide).strip()
 
     out = execute_subtask(subtask, bundle, router, constraints=constraints)
     result.calls.append(Call(out.model or "?", out.tier or "local", out.tokens_in, out.tokens_out, out.cost_usd))
