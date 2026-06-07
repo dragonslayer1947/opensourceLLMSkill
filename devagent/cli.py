@@ -561,29 +561,46 @@ def compliance():
 def enforce(
     action: str = typer.Argument("status", help="on | off | status"),
     path: str = typer.Option(".", "--path", "-p"),
+    repo: bool = typer.Option(False, "--repo", help="Scope to THIS repo instead of the global default."),
 ):
-    """Turn local-execution enforcement on/off for THIS repo (needs the hook — see install-hook).
+    """Control local-execution enforcement. ON by default once the hook is installed.
 
-    'on' writes .devagent/ENFORCE; the PreToolUse hook then blocks direct source edits in this repo
-    and forces work through `devagent`, so the local model does the implementation. 'off' removes it."""
+    Global: `enforce off` disables everywhere; `enforce on` restores the default. Per-repo
+    (`--repo`): `off` writes .devagent/DISABLE (opt this repo out), `on` removes it. Per-repo always
+    wins over the global setting. Session escape: DEVAGENT_BYPASS=1."""
+    from .hooks import enforce_local as el
     root = Path(path).resolve()
-    sentinel = root / ".devagent" / "ENFORCE"
+    repo_disable = root / ".devagent" / "DISABLE"
+    repo_enforce = root / ".devagent" / "ENFORCE"
     action = action.lower()
+
     if action == "on":
-        sentinel.parent.mkdir(parents=True, exist_ok=True)
-        sentinel.write_text(
-            "devagent local-execution enforcement is ON for this repo.\n"
-            "The PreToolUse hook blocks direct source edits; route work through `devagent run`.\n"
-            "Delete this file (or run `devagent enforce off`) to disable.\n", encoding="utf-8")
-        console.print(f"[green]enforcement ON[/green] for {root}")
-        console.print("[dim]ensure the hook is installed once: devagent install-hook[/dim]")
+        if repo:
+            if repo_disable.exists():
+                repo_disable.unlink()
+            console.print(f"[green]enforcement ON[/green] for {root}")
+        else:
+            el.set_global_enabled(True)
+            console.print("[green]enforcement ON globally[/green] (the default)")
     elif action == "off":
-        if sentinel.exists():
-            sentinel.unlink()
-        console.print(f"[yellow]enforcement OFF[/yellow] for {root}")
-    else:
-        on = sentinel.exists()
-        console.print(f"enforcement: {'[green]ON[/green]' if on else 'OFF'} for {root}")
+        if repo:
+            repo_disable.parent.mkdir(parents=True, exist_ok=True)
+            repo_disable.write_text("devagent enforcement disabled for this repo.\n"
+                                    "Delete this file (or `devagent enforce on --repo`) to re-enable.\n",
+                                    encoding="utf-8")
+            console.print(f"[yellow]enforcement OFF[/yellow] for {root}")
+        else:
+            el.set_global_enabled(False)
+            console.print("[yellow]enforcement OFF globally[/yellow] — re-enable with `devagent enforce on`")
+    else:  # status
+        g = "[green]ON[/green]" if el.is_globally_enabled() else "[yellow]OFF[/yellow]"
+        console.print(f"global default: {g}")
+        if repo_disable.exists():
+            console.print(f"this repo ({root.name}): [yellow]OFF[/yellow] — .devagent/DISABLE")
+        elif repo_enforce.exists():
+            console.print(f"this repo ({root.name}): [green]ON[/green] — .devagent/ENFORCE")
+        else:
+            console.print(f"this repo ({root.name}): inherits global → {g}")
 
 
 @app.command(name="install-hook")
@@ -621,8 +638,9 @@ def install_hook(uninstall: bool = typer.Option(False, "--uninstall", help="Remo
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
     console.print(f"[green]installed[/green] enforcement hook → {settings}")
-    console.print("[dim]turn it on per-repo with `devagent enforce on`; "
-                  "restart Claude Code to load the hook.[/dim]")
+    console.print("[dim]enforcement is ON by default once loaded. Disable with "
+                  "`devagent enforce off` (global) or `--repo` (one repo). "
+                  "Restart Claude Code to load the hook.[/dim]")
 
 
 @app.command(name="install-skill")

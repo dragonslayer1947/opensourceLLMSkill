@@ -26,31 +26,59 @@ SOURCE_SUFFIXES = {
 }
 
 MESSAGE = (
-    "BLOCKED by devagent: local-execution enforcement is ON for this repo (.devagent/ENFORCE).\n"
+    "BLOCKED by devagent: local-execution enforcement is ON (default).\n"
     "Do NOT hand-write {path}. Decompose the task and route the implementation through the "
     "local model instead:\n"
     "  1) write the subtasks as JSON (each ≤3 files, scoped for Qwen3.6 27B),\n"
     "  2) devagent plan-import --task \"<task>\" --file plan.json --strict\n"
     "  3) devagent run --from-plan <id>\n"
     "Your role is to plan + verify (read the diff, the gate result, the goal) — not to author. "
-    "If a piece fails, split it further. To disable: `devagent enforce off` (or DEVAGENT_BYPASS=1)."
+    "If a piece fails, split it further.\n"
+    "To disable: `devagent enforce off` (global) · `devagent enforce off --repo` (this repo only) "
+    "· or DEVAGENT_BYPASS=1 for one session."
 )
 
 
+def global_state_path() -> Path:
+    return Path.home() / ".devagent" / "enforce-disabled"
+
+
+def is_globally_enabled() -> bool:
+    """Enforcement is ON by default; a global 'enforce-disabled' flag turns it off everywhere."""
+    return not global_state_path().exists()
+
+
+def set_global_enabled(enabled: bool) -> None:
+    p = global_state_path()
+    if enabled:
+        if p.exists():
+            p.unlink()
+    else:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("devagent enforcement globally disabled\n", encoding="utf-8")
+
+
 def enforcement_active(file_path: str, cwd: str) -> bool:
-    """True if enforcement applies to this path. Env overrides win; otherwise walk up to find
-    a `.devagent/ENFORCE` sentinel, stopping at the repo root (.git)."""
+    """True if enforcement applies. Precedence: session bypass → per-repo DISABLE/ENFORCE →
+    env DEVAGENT_ENFORCE → global default (ON). Per-repo wins so you can opt a repo out (or in)
+    regardless of the global setting."""
     if os.environ.get("DEVAGENT_BYPASS") == "1":
         return False
-    if os.environ.get("DEVAGENT_ENFORCE") == "1":
-        return True
     base = Path(file_path).resolve().parent if file_path else Path(cwd or ".").resolve()
     for d in [base, *base.parents]:
-        if (d / ".devagent" / "ENFORCE").exists():
+        dev = d / ".devagent"
+        if (dev / "DISABLE").exists():
+            return False
+        if (dev / "ENFORCE").exists():
             return True
         if (d / ".git").exists():
             break
-    return False
+    env = os.environ.get("DEVAGENT_ENFORCE")
+    if env == "0":
+        return False
+    if env == "1":
+        return True
+    return is_globally_enabled()
 
 
 def should_block(tool_name: str, file_path: str, cwd: str) -> bool:
