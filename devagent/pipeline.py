@@ -39,9 +39,9 @@ from .planning import blast_radius
 from .prove.audit import differential_audit, persist as persist_audit
 from .review import reviewer as reviewer_mod
 from .ui import activity
+from .validate import impact
 from .validate import migration_gate
 from .validate import safety_rules
-from .validate import test_runner
 from .validate.gate import run_gate
 
 
@@ -440,22 +440,24 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         else:
             result.status = "applied" if applied else "gate_failed"
 
-        # Post-apply test runner with auto-rollback (V3).
+        # Integration gate (gap #1): run the tests covering the blast radius (changed files +
+        # their transitive importers), with auto-rollback. Catches interface drift the per-file
+        # lint/type gate cannot see — only running the impacted code does.
         if test and result.status == "applied":
-            cmd = test_runner.find_test_command(task_root, config.gate)
-            if not cmd:
-                console.print("[dim]no tests detected — skipping test runner[/dim]")
+            changed = sorted({f for o in result.outcomes if o.status == "applied"
+                              for f in o.changed_files})
+            with activity(console, "Impact gate — running tests that cover the change"):
+                ires = impact.verify_impact(task_root, changed, index, config.gate)
+            detail = (": " + ", ".join(ires.ran)) if ires.ran else ""
+            console.print(f"[bold]{ires.render()}[/bold]{detail}")
+            tr.record("impact_gate", scope=ires.scope, passed=ires.passed, ran=ires.ran)
+            if ires.passed:
+                console.print("[green]impact gate passed[/green]")
             else:
-                console.print(f"[bold]Running tests[/bold]: {cmd}")
-                with activity(console, "Running the test suite"):
-                    passed, out = test_runner.run_tests(task_root, cmd)
-                if passed:
-                    console.print("[green]tests passed[/green]")
-                else:
-                    for o in result.outcomes:
-                        ap.undo_from_snapshot(task_root, _snap_dir(task_root, session_id, o.subtask_id))
-                    result.status = "tests_failed"
-                    console.print(f"[red]tests failed → rolled back[/red]\n{out[-500:]}")
+                for o in result.outcomes:
+                    ap.undo_from_snapshot(task_root, _snap_dir(task_root, session_id, o.subtask_id))
+                result.status = "tests_failed"
+                console.print(f"[red]impact gate failed → rolled back[/red]\n{ires.output[-700:]}")
     finally:
         lock_mod.release(task_root, acquired, session_id)
 

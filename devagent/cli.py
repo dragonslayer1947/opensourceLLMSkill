@@ -69,7 +69,7 @@ def run(
     flag: list[str] = typer.Option(None, "--flag", help="Grant a safety-rule flag (e.g. security-review). Repeatable."),
     contract: bool = typer.Option(True, "--contract/--no-contract", help="Contract-first for API tasks (spec → validate → conformance)."),
     review: bool = typer.Option(False, "--review", help="Reviewer agent checks each diff; a HIGH finding rolls it back."),
-    test: bool = typer.Option(False, "--test", help="Run the test suite after applying; auto-rollback on failure."),
+    test: bool = typer.Option(False, "--test", help="Impact gate: after applying, run the tests covering the change (blast radius); auto-rollback on failure."),
     parallel: bool = typer.Option(False, "--parallel", help="Run independent subtasks concurrently in dependency-ordered, file-disjoint waves."),
 ):
     """Decompose a task into in-envelope subtasks, execute locally, gate, and apply.
