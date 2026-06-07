@@ -20,6 +20,7 @@ from .context.index import build_index
 from .context.retrieve import retrieve
 from .decompose.planner import Plan, Subtask, decompose
 from .execute import apply as ap
+from .execute import contract as contract_mod
 from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .knowledge import adr
@@ -162,7 +163,8 @@ def _run_subtask(
 
 def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Console,
         files: list[str] | None = None, role_overrides: dict[str, str] | None = None,
-        audit: bool = False, flags: set[str] | None = None) -> RunResult:
+        audit: bool = False, flags: set[str] | None = None,
+        contract: bool = True) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
@@ -205,6 +207,24 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                         max_context_tokens=max_ctx, has_pattern=has_pattern)
     console.print(f"[bold]Routing[/bold]: {decision.route} (score {decision.score}"
                   + (f" — {', '.join(decision.reasons)}" if decision.reasons else "") + ")")
+
+    # Contract-first for API tasks — generate + validate an OpenAPI spec before implementing.
+    contract_doc = None
+    if contract and contract_mod.is_api_task(task):
+        try:
+            cr = contract_mod.generate_contract(task, bundle.render(), router)
+            result.calls.append(Call(cr.model or "?", cr.tier or "local",
+                                     cr.tokens_in, cr.tokens_out, cr.cost_usd))
+            if cr.spec and cr.valid:
+                contract_doc = cr.spec
+                contract_mod.save_contract(task_root, session_id, cr.yaml_text)
+                constraints = (constraints + "\n\nAPI CONTRACT (implement exactly):\n"
+                               + cr.yaml_text).strip()
+                console.print("[green]contract-first[/green]: OpenAPI spec generated + validated")
+            else:
+                console.print(f"[yellow]contract skipped[/yellow]: {'; '.join(cr.errors) or 'invalid'}")
+        except Exception as e:  # noqa: BLE001 — contract-first is best-effort
+            console.print(f"[yellow]contract skipped[/yellow]: {e}")
 
     console.print(f"[bold]Decomposing[/bold] (retrieved ~{bundle.est_tokens} ctx tokens, "
                   f"in-envelope={bundle.in_envelope}) …")
@@ -264,6 +284,20 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
             result.status = "applied"
     else:
         result.status = "applied" if applied else "gate_failed"
+
+    # Contract conformance — diff the implementation back against the spec (gap #6).
+    if contract_doc is not None and result.status == "applied":
+        applied_files = sorted({f for o in result.outcomes if o.status == "applied"
+                                for f in o.changed_files})
+        code = "\n".join((task_root / f).read_text(encoding="utf-8", errors="replace")
+                         for f in applied_files if (task_root / f).exists())
+        discrepancies = contract_mod.conformance_check(contract_doc, code)
+        if discrepancies:
+            console.print("[yellow]contract conformance — implementation diverges:[/yellow]")
+            for d in discrepancies[:8]:
+                console.print(f"  • {d}")
+        else:
+            console.print("[green]contract conformance: implementation matches the spec[/green]")
 
     _record(config, task, result)
     _save_session(task_root, result, task)

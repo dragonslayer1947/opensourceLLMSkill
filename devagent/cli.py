@@ -61,6 +61,7 @@ def run(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the keep/rollback confirm."),
     audit: bool = typer.Option(False, "--audit", help="After applying, measure parity vs the frontier model (uses the frontier model)."),
     flag: list[str] = typer.Option(None, "--flag", help="Grant a safety-rule flag (e.g. security-review). Repeatable."),
+    contract: bool = typer.Option(True, "--contract/--no-contract", help="Contract-first for API tasks (spec → validate → conformance)."),
 ):
     """Decompose a task into in-envelope subtasks, execute locally, gate, and apply."""
     overrides: dict[str, str] = {}
@@ -71,7 +72,7 @@ def run(
     try:
         result = pipeline.run(task, path, dry_run=dry_run, assume_yes=yes, console=console,
                               files=list(file or []), role_overrides=overrides, audit=audit,
-                              flags=set(flag or []))
+                              flags=set(flag or []), contract=contract)
     except RoutingError as e:
         console.print(f"\n[red]model error:[/red] {e}")
         console.print("[dim]Check `devagent status` — is the local server running and are keys set?[/dim]")
@@ -216,6 +217,35 @@ def service(
     console.print(f"  events out/in: {', '.join(s.events_produces) or '—'} / "
                   f"{', '.join(s.events_consumes) or '—'}")
     console.print(f"  owns dbs: {', '.join(s.dbs_owned) or '—'}")
+
+
+@app.command()
+def contract(
+    task: str = typer.Argument(..., help="API task to draft a contract for."),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Generate and validate an OpenAPI contract for an API task (no implementation)."""
+    from .context.index import build_index
+    from .context.retrieve import retrieve
+    from .execute import contract as cm
+    cfg = load_config()
+    root = Path(path).resolve()
+    idx = build_index(root)
+    bundle = retrieve(idx, task,
+                      max_context_tokens=int(cfg.envelope.get("max_context_tokens", 12000)),
+                      max_file_lines=int(cfg.envelope.get("max_file_lines", 400)))
+    router = Router(Registry(cfg))
+    try:
+        cr = cm.generate_contract(task, bundle.render(), router)
+    except RoutingError as e:
+        console.print(f"[red]model error:[/red] {e}")
+        raise typer.Exit(1)
+    if cr.spec and cr.valid:
+        console.print("[green]valid OpenAPI contract:[/green]\n")
+        console.print(cr.yaml_text)
+    else:
+        console.print(f"[yellow]invalid/unparseable:[/yellow] {'; '.join(cr.errors)}")
+        raise typer.Exit(1)
 
 
 @app.command()
