@@ -579,12 +579,18 @@ def pattern_add(
     description: str = typer.Option("", "--desc", "-d"),
     tag: list[str] = typer.Option(None, "--tag", "-t", help="Tag (repeatable)."),
     snippet: str = typer.Option("", "--snippet", "-s"),
+    enforce_glob: str = typer.Option("", "--enforce-glob", help="Files matching this glob must contain --enforce-regex."),
+    enforce_regex: str = typer.Option("", "--enforce-regex", help="Regex required in matching files."),
+    enforce_severity: str = typer.Option("warn", "--enforce-severity", help="warn | block."),
     path: str = typer.Option(".", "--path", "-p"),
 ):
     """Capture a pattern (explicit — frontier fixes are not auto-promoted)."""
     from .knowledge import pattern_registry as pr
-    p = pr.add_pattern(Path(path).resolve(), name, description, list(tag or []), snippet)
-    console.print(f"added pattern [bold]{p.id}[/bold]")
+    p = pr.add_pattern(Path(path).resolve(), name, description, list(tag or []), snippet,
+                       enforce_glob=enforce_glob, enforce_regex=enforce_regex,
+                       enforce_severity=enforce_severity)
+    console.print(f"added pattern [bold]{p.id}[/bold]"
+                  + (" (enforced)" if enforce_glob and enforce_regex else ""))
 
 
 @pattern_app.command("deprecate")

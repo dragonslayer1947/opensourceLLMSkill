@@ -16,6 +16,8 @@ from pathlib import Path
 
 import yaml
 
+from ..validate.safety_rules import Violation, _glob_to_re
+
 PATTERNS_FILE = ".devagent/patterns.yaml"
 HALF_LIFE_DAYS = 90.0
 MIN_EFFECTIVE = 0.3
@@ -35,6 +37,10 @@ class Pattern:
     last_used: str = ""
     uses: int = 0
     status: str = "active"  # active | deprecated
+    # optional write-time enforcement: files matching enforce_glob must contain enforce_regex
+    enforce_glob: str = ""
+    enforce_regex: str = ""
+    enforce_severity: str = "warn"  # warn | block
 
 
 def _now() -> str:
@@ -67,6 +73,9 @@ def load_patterns(root: Path) -> list[Pattern]:
             last_used=str(d.get("last_used", "")),
             uses=int(d.get("uses", 0)),
             status=str(d.get("status", "active")),
+            enforce_glob=str(d.get("enforce_glob", "")),
+            enforce_regex=str(d.get("enforce_regex", "")),
+            enforce_severity=str(d.get("enforce_severity", "warn")),
         ))
     return out
 
@@ -79,7 +88,8 @@ def save_patterns(root: Path, patterns: list[Pattern]) -> None:
 
 
 def add_pattern(root: Path, name: str, description: str = "", tags: list[str] | None = None,
-                snippet: str = "", confidence: float = 0.6) -> Pattern:
+                snippet: str = "", confidence: float = 0.6, enforce_glob: str = "",
+                enforce_regex: str = "", enforce_severity: str = "warn") -> Pattern:
     patterns = load_patterns(root)
     pid = _slug(name)
     existing = {p.id for p in patterns}
@@ -89,10 +99,33 @@ def add_pattern(root: Path, name: str, description: str = "", tags: list[str] | 
             i += 1
         pid = f"{pid}-{i}"
     pat = Pattern(id=pid, name=name, description=description, tags=tags or [], snippet=snippet,
-                  confidence=confidence, created_at=_now(), last_used=_now(), uses=0)
+                  confidence=confidence, created_at=_now(), last_used=_now(), uses=0,
+                  enforce_glob=enforce_glob, enforce_regex=enforce_regex,
+                  enforce_severity=enforce_severity)
     patterns.append(pat)
     save_patterns(root, patterns)
     return pat
+
+
+def enforce_violations(patterns: list[Pattern], changes, now: datetime | None = None) -> list[Violation]:
+    """Write-time enforcement: a changed file matching a pattern's enforce_glob must contain its
+    enforce_regex, else a Violation (warn/block) is raised. Only active patterns enforce."""
+    out: list[Violation] = []
+    for p in active_patterns(patterns, now):
+        if not p.enforce_glob or not p.enforce_regex:
+            continue
+        rx = _glob_to_re(p.enforce_glob)
+        try:
+            creg = re.compile(p.enforce_regex)
+        except re.error:
+            continue
+        for ch in changes:
+            path = ch.path.replace("\\", "/")
+            if rx.match(path) and not creg.search(getattr(ch, "new", "") or ""):
+                sev = p.enforce_severity if p.enforce_severity in ("block", "warn") else "warn"
+                out.append(Violation(f"pattern:{p.id}", sev, ch.path,
+                                     f"pattern '{p.name}' requires /{p.enforce_regex}/"))
+    return out
 
 
 def deprecate(root: Path, pattern_id: str) -> bool:

@@ -100,7 +100,7 @@ def _run_subtask(
     index, console: Console, result: RunResult, dry_run: bool,
     files: set[str] | None = None,
     rules: list | None = None, flags: set[str] | None = None,
-    constraints: str = "", review: bool = False,
+    constraints: str = "", review: bool = False, enforce_patterns: list | None = None,
 ) -> SubtaskOutcome:
     env = config.envelope
     bundle = retrieve(
@@ -131,6 +131,7 @@ def _run_subtask(
     # Safety rules + migration gate — evaluated before any write.
     violations = safety_rules.evaluate(prepared.changes, rules or [], flags or set())
     violations += migration_gate.check(prepared.changes, flags or set())
+    violations += pattern_registry.enforce_violations(enforce_patterns or [], prepared.changes)
     for v in violations:
         tag = "[red]BLOCK[/red]" if v.severity == "block" else "[yellow]warn[/yellow]"
         console.print(f"  {tag} [{v.rule_id}] {v.path}: {v.message}")
@@ -212,7 +213,8 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
         console.print(f"[dim]compliance profiles: {', '.join(profiles)}[/dim]")
     adrs = adr.load_adrs(task_root)
     constraints = adr.constraints_context(adrs)
-    patterns_ctx = pattern_registry.patterns_context(pattern_registry.load_patterns(task_root), task)
+    all_patterns = pattern_registry.load_patterns(task_root)
+    patterns_ctx = pattern_registry.patterns_context(all_patterns, task)
     if patterns_ctx:
         constraints = (constraints + "\n\nHOUSE PATTERNS (follow):\n" + patterns_ctx).strip()
     if adr.active(adrs):
@@ -332,7 +334,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     def _run_one(st: Subtask) -> SubtaskOutcome:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
         return _run_subtask(st, task_root, config, router, index, console, result, dry_run,
-                            file_set, rules, flags, constraints, review)
+                            file_set, rules, flags, constraints, review, all_patterns)
 
     try:
         if parallel and len(plan.subtasks) > 1 and not dry_run:
@@ -472,7 +474,8 @@ def resume_session(session_id: str, path: str, *, assume_yes: bool, console: Con
     for st in remaining:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
         outcome = _run_subtask(st, task_root, config, router, index, console, result,
-                               dry_run=False, rules=rules, flags=set(), constraints=constraints)
+                               dry_run=False, rules=rules, flags=set(), constraints=constraints,
+                               enforce_patterns=pattern_registry.load_patterns(task_root))
         result.outcomes.append(outcome)
         # merge into completed set as we go (durable checkpoint)
         if outcome.status == "applied":

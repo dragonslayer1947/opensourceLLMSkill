@@ -51,3 +51,45 @@ def test_patterns_context_text(tmp_path):
     pr.add_pattern(tmp_path, "Cursor pagination", "use cursors", tags=["pagination"])
     ctx = pr.patterns_context(pr.load_patterns(tmp_path), "pagination please")
     assert "Cursor pagination" in ctx and "use cursors" in ctx
+
+
+# --- write-time enforcement (V4) ---
+from dataclasses import dataclass  # noqa: E402
+
+
+@dataclass
+class _Change:
+    path: str
+    new: str = ""
+
+
+def test_enforce_flags_missing_pattern(tmp_path):
+    pr.add_pattern(tmp_path, "Routes use cursor", tags=["api"],
+                   enforce_glob="**/routes/*.py", enforce_regex="cursor",
+                   enforce_severity="block")
+    patterns = pr.load_patterns(tmp_path)
+    v = pr.enforce_violations(patterns, [_Change("app/routes/products.py", "def list(): return []")])
+    assert len(v) == 1 and v[0].severity == "block" and "cursor" in v[0].message
+
+
+def test_enforce_satisfied(tmp_path):
+    pr.add_pattern(tmp_path, "Routes use cursor", enforce_glob="**/routes/*.py",
+                   enforce_regex="cursor")
+    patterns = pr.load_patterns(tmp_path)
+    v = pr.enforce_violations(patterns, [_Change("app/routes/p.py", "def list(cursor=0): ...")])
+    assert v == []
+
+
+def test_enforce_ignores_nonmatching_path(tmp_path):
+    pr.add_pattern(tmp_path, "Routes use cursor", enforce_glob="**/routes/*.py",
+                   enforce_regex="cursor")
+    patterns = pr.load_patterns(tmp_path)
+    assert pr.enforce_violations(patterns, [_Change("app/models.py", "x=1")]) == []
+
+
+def test_enforce_skips_deprecated(tmp_path):
+    pr.add_pattern(tmp_path, "Routes use cursor", enforce_glob="**/routes/*.py",
+                   enforce_regex="cursor", enforce_severity="block")
+    pr.deprecate(tmp_path, "routes-use-cursor")
+    patterns = pr.load_patterns(tmp_path)
+    assert pr.enforce_violations(patterns, [_Change("app/routes/p.py", "no match")]) == []
