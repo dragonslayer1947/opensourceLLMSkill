@@ -170,6 +170,55 @@ def resume(
 
 
 @app.command()
+def services(
+    path: str = typer.Option(".", "--path", "-p"),
+    init: bool = typer.Option(False, "--init", help="Write a sample service definition and exit."),
+):
+    """List services in the registry (or --init to scaffold one)."""
+    from .knowledge import service_registry as sr
+    root = Path(path).resolve()
+    if init:
+        p = sr.write_sample(root)
+        console.print(f"sample service at [bold]{p}[/bold]")
+        return
+    svcs = sr.load_services(root)
+    if not svcs:
+        console.print(f"[dim]no services in {sr.registry_dir(root)} — "
+                      f"run `devagent services --init`[/dim]")
+        return
+    table = Table(title="service registry", show_header=True, header_style="bold")
+    for c in ("name", "team", "sla", "consumes", "consumed by"):
+        table.add_column(c)
+    for s in svcs.values():
+        table.add_row(s.name, s.team, s.sla_tier, ", ".join(s.consumes_names) or "—",
+                      ", ".join(sr.downstream_consumers(svcs, s.name)) or "—")
+    console.print(table)
+
+
+@app.command()
+def service(
+    name: str = typer.Argument(..., help="Service name to show."),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Show one service's definition and dependency edges."""
+    from .knowledge import service_registry as sr
+    root = Path(path).resolve()
+    svcs = sr.load_services(root)
+    s = svcs.get(name)
+    if not s:
+        console.print(f"[yellow]no service '{name}'[/yellow] (have: {', '.join(svcs) or 'none'})")
+        raise typer.Exit(1)
+    console.print(f"[bold]{s.name}[/bold]  team={s.team}  sla={s.sla_tier}")
+    console.print(f"  tech: {', '.join(s.tech_stack) or '—'}")
+    console.print(f"  compliance: {', '.join(s.compliance_zones) or '—'}")
+    console.print(f"  consumes: {', '.join(s.consumes_names) or '—'}")
+    console.print(f"  consumed by: {', '.join(sr.downstream_consumers(svcs, name)) or '—'}")
+    console.print(f"  events out/in: {', '.join(s.events_produces) or '—'} / "
+                  f"{', '.join(s.events_consumes) or '—'}")
+    console.print(f"  owns dbs: {', '.join(s.dbs_owned) or '—'}")
+
+
+@app.command()
 def status(path: str = typer.Option(".", "--path", "-p")):
     """Doctor: config, model reachability, gate tools, git."""
     ensure_config()
