@@ -69,7 +69,7 @@ def extract_spec_block(text: str) -> dict | None:
 def generate_contract(task: str, context: str, router) -> ContractResult:
     user = f"TASK:\n{task}\n\nEXISTING CONTEXT (conventions):\n{context[:4000]}\n\nOutput the paths object."
     result = router.complete("executor", SPEC_SYSTEM, user, max_tokens=1200)
-    meta = dict(model=router.last_model, tier=router.last_tier,
+    meta = dict(model=result.model_name, tier=result.tier,
                 tokens_in=result.tokens_in, tokens_out=result.tokens_out, cost_usd=result.cost_usd)
     paths = extract_spec_block(result.text)
     if not isinstance(paths, dict):

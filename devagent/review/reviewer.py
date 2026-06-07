@@ -55,7 +55,7 @@ def review_diff(task: str, diff: str, router, role: str = "reviewer") -> tuple[l
         return [], {}
     user = f"TASK:\n{task}\n\nDIFF:\n{diff[:8000]}\n\nReturn the JSON array of findings."
     result = router.complete(role, REVIEWER_SYSTEM, user, max_tokens=600, cacheable_system=True)
-    meta = {"model": router.last_model, "tier": router.last_tier,
+    meta = {"model": result.model_name, "tier": result.tier,
             "tokens_in": result.tokens_in, "tokens_out": result.tokens_out,
             "cost_usd": result.cost_usd}
     return parse_findings(result.text), meta

@@ -44,7 +44,10 @@ class Router:
                 try:
                     result = client.complete(system, user, **kw)
                     self._consecutive_failures[client.name] = 0
-                    self.last_model = client.name
+                    # carry identity on the result (thread-safe under parallel execution)
+                    result.model_name = result.model_name or client.name
+                    result.tier = client.tier
+                    self.last_model = client.name   # kept for non-concurrent callers/tests
                     self.last_tier = client.tier
                     return result
                 except Exception as e:  # noqa: BLE001

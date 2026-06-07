@@ -39,5 +39,5 @@ def get_correction(
         f"Give corrective guidance."
     )
     result = router.complete("reviewer", REVIEWER_SYSTEM, user, max_tokens=900, cacheable_system=True)
-    return (result.text, router.last_model, router.last_tier,
+    return (result.text, result.model_name, result.tier,
             result.tokens_in, result.tokens_out, result.cost_usd)

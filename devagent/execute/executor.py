@@ -77,8 +77,8 @@ def execute_subtask(
         raw=result.text,
         tokens_in=result.tokens_in,
         tokens_out=result.tokens_out,
-        model=router.last_model,
-        tier=router.last_tier,
+        model=result.model_name,
+        tier=result.tier,
         cost_usd=result.cost_usd,
         notes=notes,
     )

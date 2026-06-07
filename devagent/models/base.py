@@ -13,7 +13,8 @@ class CompletionResult:
     tokens_out: int = 0
     cache_read_tokens: int = 0
     model_name: str = ""
-    cost_usd: float = 0.0  # API-equivalent cost reported by the provider (CLI subscription => marginal $0)
+    tier: str = ""          # tier of the model that served (set by the router; thread-safe)
+    cost_usd: float = 0.0   # API-equivalent cost reported by the provider (CLI subscription => marginal $0)
 
 
 def estimate_tokens(text: str) -> int:

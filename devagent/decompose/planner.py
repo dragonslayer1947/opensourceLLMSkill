@@ -125,8 +125,8 @@ def decompose(
         return Plan(
             subtasks=[Subtask(id="s1", description=task, target_files=bundle.candidate_files[:1])],
             decomposed=True,
-            planner_model=router.last_model,
-            planner_tier=router.last_tier,
+            planner_model=result.model_name,
+            planner_tier=result.tier,
             tokens_in=result.tokens_in,
             tokens_out=result.tokens_out,
             cost_usd=result.cost_usd,
@@ -148,8 +148,8 @@ def decompose(
     return Plan(
         subtasks=subtasks,
         decomposed=True,
-        planner_model=router.last_model,
-        planner_tier=router.last_tier,
+        planner_model=result.model_name,
+        planner_tier=result.tier,
         tokens_in=result.tokens_in,
         tokens_out=result.tokens_out,
         cost_usd=result.cost_usd,
