@@ -64,18 +64,20 @@ above). Each subtask MUST:
   **Qwen3.6 27B (128K ctx) can implement from the retrieved slice** — if you doubt it can, the
   piece is still too big: split again;
 - list `target_files` and `depends_on` (ids that must finish first);
-- **carry the interface it shares with other subtasks in its description.** If `s1` defines
-  `OrderRepo.create(order) -> Order`, then `s2`'s description must state that exact signature so the
-  local model calls it correctly. This is how independently-executed pieces stay consistent.
+- declare in **`provides`** the exact interface(s) the subtask exposes (names + signatures). These
+  are injected verbatim into every dependent subtask's prompt, so independently-built pieces call
+  each other correctly. This is the single most important field for avoiding drift — be precise
+  (e.g. `"store: module-level InMemoryStore singleton (import: from app.store import store)"`).
 - be flagged if **inherently complex** (intricate logic/algorithm), even if small — see Step 5.
 
 Write them as JSON, e.g. `plan.json`:
 ```json
 [
   {"id": "s1", "description": "Add OrderRepo with create(order: Order) -> Order in app/orders/repo.py",
-   "target_files": ["app/orders/repo.py"], "depends_on": []},
-  {"id": "s2", "description": "Wire POST /orders to OrderRepo.create(order)->Order (see s1 signature)",
-   "target_files": ["app/orders/api.py"], "depends_on": ["s1"]}
+   "target_files": ["app/orders/repo.py"], "depends_on": [],
+   "provides": ["class OrderRepo with create(order: Order) -> Order in app/orders/repo.py"]},
+  {"id": "s2", "description": "Wire POST /orders to OrderRepo.create",
+   "target_files": ["app/orders/api.py"], "depends_on": ["s1"], "provides": []}
 ]
 ```
 
@@ -110,10 +112,16 @@ implement well-scoped work. So, in order:
 **NEVER** silently take over and hand-write it because the local model "isn't getting it" — split
 and retry, and surface the gate output to the user. Taking over is the failure mode, not the fix.
 
-## Step 6 — Verify the goal (not just the gate)
-The gate proves each piece compiles/passes; it does **not** prove the *task* is done. After the run,
-confirm the original goal is actually achieved (run the feature/tests, check the acceptance the user
-asked for). If it's half-built or wrong, that's a new subtask — not "done."
+## Step 6 — Verify the goal (MANDATORY: run the integration gate)
+The per-file gate proves each piece lints/compiles; it does **not** prove the pieces fit together or
+that the *task* is done. After the run you **MUST** run the non-destructive integration gate:
+```
+devagent verify -p <repo>
+```
+It checks that cross-file imports resolve (no interface drift) and runs the tests covering the
+change. If it fails, **fix the offending piece by re-running it** (Step 5) — never hand-edit. Then
+confirm the original goal is actually achieved (exercise the feature). If a public surface has no
+test, add a subtask that writes one. Half-built or wrong = a new subtask, not "done."
 
 ## Step 7 — Report savings (MANDATORY, and honestly)
 Report:

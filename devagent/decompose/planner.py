@@ -39,6 +39,7 @@ class Subtask:
     description: str
     target_files: list[str] = field(default_factory=list)
     depends_on: list[str] = field(default_factory=list)
+    provides: list[str] = field(default_factory=list)  # interfaces this subtask exposes
 
 
 @dataclass

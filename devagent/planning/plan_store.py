@@ -41,7 +41,8 @@ def save_plan(root: Path, task: str, plan: Plan, plan_id: str | None = None) -> 
         # Edit freely before running: reorder, split, fix target_files / depends_on.
         "subtasks": [
             {"id": s.id, "description": s.description,
-             "target_files": s.target_files, "depends_on": s.depends_on}
+             "target_files": s.target_files, "depends_on": s.depends_on,
+             "provides": s.provides}
             for s in plan.subtasks
         ],
     }
@@ -61,6 +62,7 @@ def subtasks_from_data(items) -> list[Subtask]:
             description=str(s.get("description", "")).strip(),
             target_files=[str(x) for x in s.get("target_files", []) or [] if x],
             depends_on=[str(x) for x in s.get("depends_on", []) or []],
+            provides=[str(x) for x in s.get("provides", []) or []],
         ))
     return out
 

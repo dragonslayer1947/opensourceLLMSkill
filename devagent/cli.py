@@ -177,6 +177,39 @@ def plan_import(
 
 
 @app.command()
+def verify(
+    path: str = typer.Option(".", "--path", "-p"),
+    file: list[str] = typer.Option(None, "--file", "-f", help="Scope tests to these changed files (else whole suite)."),
+):
+    """Verify the working tree without changing it: cross-file imports resolve + impacted tests pass.
+
+    The non-destructive integration gate — run after a decompose-execute build to confirm the
+    pieces fit and behave, before committing. Exits non-zero if anything fails."""
+    from .context.cache import build_index_cached
+    from .validate import impact, interface
+    root = Path(path).resolve()
+
+    issues = interface.check_imports(root)
+    for i in issues:
+        console.print(f"[red]interface[/red]: {i}")
+    if not issues:
+        console.print("[green]interfaces resolve[/green] — no dangling cross-file imports")
+
+    cfg = load_config()
+    index = build_index_cached(root)
+    res = impact.verify_impact(root, list(file or []), index, cfg.gate)
+    console.print(f"[bold]{res.render()}[/bold]" + (": " + ", ".join(res.ran) if res.ran else ""))
+    if res.scope != "skipped":
+        console.print("[green]tests passed[/green]" if res.passed
+                      else f"[red]tests failed[/red]\n{res.output[-700:]}")
+
+    ok = not issues and res.passed
+    console.print("\n[green]✓ verify passed[/green]" if ok else "\n[red]✗ verify failed[/red]")
+    if not ok:
+        raise typer.Exit(1)
+
+
+@app.command()
 def cost():
     """Show cumulative cost savings (actual vs all-frontier counterfactual)."""
     report.show_cost(load_config(), console)

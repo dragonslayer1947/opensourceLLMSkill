@@ -381,12 +381,21 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
             console.print(f"[red]session budget reached[/red]: {reason} — stopping")
         return bool(reason)
 
+    by_id = {s.id: s for s in plan.subtasks}
+
     def _run_one(st: Subtask, use_spinner: bool = True) -> SubtaskOutcome:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
         t0 = time.monotonic()
         pre = len(result.calls)
+        # Inject the interfaces this subtask's (transitive) dependencies declared they provide,
+        # so independently-built pieces call each other with the exact agreed signatures (gap #2).
+        ifaces = _shared_interfaces(st, by_id)
+        cons = constraints
+        if ifaces:
+            cons = (constraints + "\n\nSHARED INTERFACES (defined by earlier subtasks — use these "
+                    "names/signatures EXACTLY):\n" + "\n".join(f"- {i}" for i in ifaces)).strip()
         outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
-                               file_set, rules, flags, constraints, review, all_patterns,
+                               file_set, rules, flags, cons, review, all_patterns,
                                use_spinner=use_spinner)
         new_calls = result.calls[pre:]
         tr.record("subtask", id=st.id, status=outcome.status, files=outcome.changed_files,
@@ -570,6 +579,22 @@ def plan_only(task: str, path: str, *, console: Console,
     console.print(f"[dim]review/edit that file, then execute exactly it:[/dim] "
                   f"devagent run --from-plan {plan_id}")
     return PlanPreview(plan, decision.route, bundle.est_tokens, level, score)
+
+
+def _shared_interfaces(subtask: Subtask, by_id: dict) -> list[str]:
+    """Collect `provides` from a subtask's transitive dependencies (the interfaces it consumes)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    stack = list(subtask.depends_on or [])
+    while stack:
+        dep_id = stack.pop()
+        if dep_id in seen or dep_id not in by_id:
+            continue
+        seen.add(dep_id)
+        dep = by_id[dep_id]
+        out.extend(dep.provides or [])
+        stack.extend(dep.depends_on or [])
+    return out
 
 
 def _consistency_check(result: RunResult, console: Console) -> None:
