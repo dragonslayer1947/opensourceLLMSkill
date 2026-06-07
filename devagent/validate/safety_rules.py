@@ -93,6 +93,21 @@ def write_sample(root: Path) -> Path:
 
 
 def _glob_to_re(glob: str) -> re.Pattern:
+    """Convert a glob pattern to a compiled regex anchored at both ends (^ … $).
+
+    Translation rules:
+    - ``**``  matches any sequence of characters including path separators (``/``),
+      so it can cross directory boundaries.  A trailing ``**/`` makes the leading
+      separator optional, allowing ``**/x`` to match both ``a/b/x`` and bare ``x``.
+    - ``*``   matches any sequence of characters *within* a single path segment;
+      it will not cross a ``/``.
+    - ``?``   matches exactly one character — any character, including a ``/`` separator
+      (it translates to regex ``.``).
+    - All other characters are regex-escaped so they are treated as literals.
+
+    Backslashes in the input are normalised to forward slashes before processing.
+    Returns a compiled :class:`re.Pattern`.
+    """
     g = glob.replace("\\", "/")
     out = "^"
     j = 0
