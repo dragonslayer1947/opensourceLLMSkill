@@ -248,6 +248,30 @@ def contract(
         raise typer.Exit(1)
 
 
+@app.command(name="contract-diff")
+def contract_diff(
+    old: str = typer.Argument(..., help="Old OpenAPI YAML/JSON file."),
+    new: str = typer.Argument(..., help="New OpenAPI YAML/JSON file."),
+):
+    """Detect consumer-facing breaking changes between two OpenAPI specs (pure Python)."""
+    import yaml
+    from .execute import contract as cm
+    try:
+        old_doc = yaml.safe_load(Path(old).read_text(encoding="utf-8")) or {}
+        new_doc = yaml.safe_load(Path(new).read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError) as e:
+        console.print(f"[red]could not read specs:[/red] {e}")
+        raise typer.Exit(2)
+    changes = cm.diff_openapi(old_doc, new_doc)
+    if not changes:
+        console.print("[green]no breaking changes[/green]")
+        return
+    console.print(f"[red]{len(changes)} breaking change(s):[/red]")
+    for c in changes:
+        console.print(f"  • [{c.kind}] {c.location}" + (f" — {c.detail}" if c.detail else ""))
+    raise typer.Exit(1)
+
+
 @app.command()
 def status(path: str = typer.Option(".", "--path", "-p")):
     """Doctor: config, model reachability, gate tools, git."""

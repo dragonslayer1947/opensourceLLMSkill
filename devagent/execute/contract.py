@@ -121,3 +121,80 @@ def save_contract(root: Path, name: str, yaml_text: str) -> Path:
     p = d / f"{name}.yaml"
     p.write_text(yaml_text, encoding="utf-8")
     return p
+
+
+# ── OpenAPI breaking-change diff (pure Python — replaces oasdiff) ──────────────
+
+@dataclass
+class BreakingChange:
+    kind: str           # path_removed | method_removed | request_required_added |
+                        #   response_field_removed | field_type_changed
+    location: str
+    detail: str = ""
+
+
+def _op_request_schema(op: dict) -> dict:
+    content = (op.get("requestBody", {}) or {}).get("content", {}) or {}
+    for media in content.values():
+        return media.get("schema", {}) or {}
+    return {}
+
+
+def _op_response_schema(op: dict) -> dict:
+    responses = op.get("responses", {}) or {}
+    for code in ("200", "201", 200, 201):
+        if code in responses:
+            content = (responses[code] or {}).get("content", {}) or {}
+            for media in content.values():
+                return media.get("schema", {}) or {}
+    return {}
+
+
+def _props(schema: dict) -> dict:
+    return schema.get("properties", {}) or {}
+
+
+def diff_openapi(old: dict, new: dict) -> list[BreakingChange]:
+    """Consumer-facing breaking changes between two OpenAPI docs."""
+    changes: list[BreakingChange] = []
+    old_paths = old.get("paths", {}) or {}
+    new_paths = new.get("paths", {}) or {}
+
+    for path, old_methods in old_paths.items():
+        if path not in new_paths:
+            changes.append(BreakingChange("path_removed", path))
+            continue
+        if not isinstance(old_methods, dict):
+            continue
+        new_methods = new_paths[path] or {}
+        for method, old_op in old_methods.items():
+            if not isinstance(old_op, dict):
+                continue
+            if method not in new_methods:
+                changes.append(BreakingChange("method_removed", f"{method.upper()} {path}"))
+                continue
+            new_op = new_methods[method] or {}
+            loc = f"{method.upper()} {path}"
+
+            # newly-required request fields break existing clients
+            old_req = set((_op_request_schema(old_op).get("required", []) or []))
+            new_req = set((_op_request_schema(new_op).get("required", []) or []))
+            for f in sorted(new_req - old_req):
+                changes.append(BreakingChange("request_required_added", loc, f"now requires '{f}'"))
+
+            # removed response fields break clients that read them
+            old_resp = _props(_op_response_schema(old_op))
+            new_resp = _props(_op_response_schema(new_op))
+            for f in sorted(set(old_resp) - set(new_resp)):
+                changes.append(BreakingChange("response_field_removed", loc, f"dropped '{f}'"))
+
+            # field type changes (request or response)
+            for label, o, n in (("request", _props(_op_request_schema(old_op)), _props(_op_request_schema(new_op))),
+                                 ("response", old_resp, new_resp)):
+                for f in set(o) & set(n):
+                    ot, nt = o[f].get("type"), n[f].get("type")
+                    if ot and nt and ot != nt:
+                        changes.append(BreakingChange("field_type_changed", loc,
+                                                      f"{label} '{f}': {ot} → {nt}"))
+    return changes
+
