@@ -49,6 +49,19 @@ def prepare(root: Path, edits: list[Edit]) -> PreparedEdits:
     return prepared
 
 
+def unified_diff(changes: list[FileChange]) -> str:
+    """Concatenated unified diff for a set of changes (for the reviewer / logging)."""
+    parts = []
+    for ch in changes:
+        diff = "".join(difflib.unified_diff(
+            (ch.old or "").splitlines(keepends=True), ch.new.splitlines(keepends=True),
+            fromfile=f"a/{ch.path}", tofile=f"b/{ch.path}", n=3,
+        ))
+        if diff.strip():
+            parts.append(diff)
+    return "\n".join(parts)
+
+
 def render_diff(changes: list[FileChange], console: Console) -> None:
     for ch in changes:
         old_lines = (ch.old or "").splitlines(keepends=True)

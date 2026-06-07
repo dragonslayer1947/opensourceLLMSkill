@@ -32,6 +32,7 @@ from .models.router import Router
 from .orchestration.classifier import classify
 from .planning import blast_radius
 from .prove.audit import differential_audit, persist as persist_audit
+from .review import reviewer as reviewer_mod
 from .validate import safety_rules
 from .validate.gate import run_gate
 
@@ -95,7 +96,7 @@ def _run_subtask(
     index, console: Console, result: RunResult, dry_run: bool,
     files: set[str] | None = None,
     rules: list | None = None, flags: set[str] | None = None,
-    constraints: str = "",
+    constraints: str = "", review: bool = False,
 ) -> SubtaskOutcome:
     env = config.envelope
     bundle = retrieve(
@@ -136,6 +137,7 @@ def _run_subtask(
     ap.snapshot(task_root, snap, prepared.changes)
     ap.write_changes(task_root, prepared.changes)
     changed = [c.path for c in prepared.changes]
+    final_changes = prepared.changes
 
     gate = run_gate(task_root, changed, config.gate)
     escalated = False
@@ -153,20 +155,38 @@ def _run_subtask(
             ap.snapshot(task_root, snap, prepared2.changes)
             ap.write_changes(task_root, prepared2.changes)
             changed = [c.path for c in prepared2.changes]
+            final_changes = prepared2.changes
             gate = run_gate(task_root, changed, config.gate)
 
-    status = "applied" if gate.passed else "gate_failed"
-    if status == "gate_failed":
+    if not gate.passed:
         console.print(f"  [red]gate still failing[/red] on {subtask.id}:\n{gate.render()}")
-    else:
-        console.print(f"  [green]✓[/green] {subtask.id}: {', '.join(changed)}")
-    return SubtaskOutcome(subtask.id, subtask.description, changed, gate.to_dict(), escalated, status)
+        return SubtaskOutcome(subtask.id, subtask.description, changed, gate.to_dict(),
+                              escalated, "gate_failed")
+
+    # Reviewer agent (V3) — an extra gate: a HIGH-severity finding rolls the subtask back.
+    if review:
+        findings, meta = reviewer_mod.review_diff(
+            subtask.description, ap.unified_diff(final_changes), router)
+        if meta:
+            result.calls.append(Call(meta["model"] or "?", meta["tier"] or "cli",
+                                     meta["tokens_in"], meta["tokens_out"], meta["cost_usd"]))
+        for f in findings:
+            color = {"high": "red", "medium": "yellow", "low": "dim"}[f.severity]
+            console.print(f"  [{color}]review/{f.severity}[/{color}] {f.category}: {f.message}")
+        if reviewer_mod.has_blocking(findings):
+            ap.undo_from_snapshot(task_root, snap)
+            console.print(f"  [red]review blocked {subtask.id}[/red] (rolled back)")
+            return SubtaskOutcome(subtask.id, subtask.description, changed, gate.to_dict(),
+                                  escalated, "review_failed")
+
+    console.print(f"  [green]✓[/green] {subtask.id}: {', '.join(changed)}")
+    return SubtaskOutcome(subtask.id, subtask.description, changed, gate.to_dict(), escalated, "applied")
 
 
 def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Console,
         files: list[str] | None = None, role_overrides: dict[str, str] | None = None,
         audit: bool = False, flags: set[str] | None = None,
-        contract: bool = True) -> RunResult:
+        contract: bool = True, review: bool = False) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
@@ -295,7 +315,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                 break
             console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
             outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
-                                   file_set, rules, flags, constraints)
+                                   file_set, rules, flags, constraints, review)
             result.outcomes.append(outcome)
             _save_session(task_root, result, task)
 
