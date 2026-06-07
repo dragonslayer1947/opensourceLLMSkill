@@ -53,6 +53,9 @@ devagent run "<task>"                # decompose → execute locally → gate �
       --audit                        #   after applying, measure parity vs the frontier model
       --flag <name>                  #   grant a safety-rule flag (repeatable)
       --contract / --no-contract     #   contract-first for API tasks (default on)
+      --review                       #   reviewer agent checks each diff (HIGH finding rolls back)
+      --test                         #   run the suite after applying; auto-rollback on failure
+      --parallel                     #   run independent subtasks concurrently (file-disjoint waves)
 
 devagent cost                        # cumulative savings (API billing avoided)
 devagent quality                     # gate pass rate, in-envelope rate, audited parity rate
@@ -76,12 +79,16 @@ devagent contract "<api task>"       # generate + validate an OpenAPI contract (
 
 # Multi-service (V2)
 devagent contract-diff OLD NEW       # OpenAPI breaking-change diff (pure Python; exit 1 on breaking)
+
+# V3
+devagent gen-tests <file>            # draft pytest tests for a source file (local model)
 ```
 
-The run pipeline (V2): retrieve (cached index) → **route** (classifier) → **contract-first**
-(API tasks) → decompose → **blast radius** (file + service level) → **write-locks** → per
-subtask: execute (ADR + pattern context) → **safety rules** → gate → escalate → apply →
-**conformance** → ledger. A per-session **token/cost budget** can hard-stop the run.
+The run pipeline (V3): retrieve (cached index) → **route** (classifier) → **contract-first**
+(API tasks) → decompose → **blast radius** (file + service) → **write-locks** → **parallel
+waves** (file-disjoint) → per subtask: **specialized** domain guidance → execute (ADR + pattern
+context) → **safety rules** → gate → escalate → **reviewer** → apply → **conformance** →
+**test runner** (auto-rollback) → ledger. A per-session **token/cost budget** can hard-stop it.
 
 ## How a run works
 

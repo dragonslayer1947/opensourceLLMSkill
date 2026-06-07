@@ -22,9 +22,15 @@ Working name: `devagent`. Target: production super-apps at Amazon/Flipkart scale
 > budget; fingerprint-keyed repo-index cache. 105 offline tests, ruff-clean. No external
 > binaries required (oasdiff/buf replaced by the pure-Python diff).
 >
-> Remaining before "production": run the executor against a live local llama.cpp server, the
-> 20-task acceptance benchmark, and V3 (parallel agents on the write-lock foundation, reviewer
-> agent, test-runner with auto-rollback).
+> **V3 (parallel + review loop) status: BUILT.** Parallel execution with a dependency-ordered,
+> file-disjoint wave scheduler (on the V2 write-lock foundation) + post-run consistency check
+> (gap #9); reviewer agent (HIGH finding rolls back); post-apply test runner with auto-rollback;
+> specialized agents by domain (migration/infra/frontend/api); test generator. Session resume
+> (V1) and cost cap (V2) already present. 135 offline tests, ruff-clean.
+>
+> Remaining before "production": run the executor against a live local llama.cpp server and the
+> 20-task acceptance benchmark. V4 (semantic RAG, pattern enforcement at write time, compliance
+> rule sets) and V5 (autonomous long-horizon) follow.
 
 ---
 
