@@ -23,6 +23,7 @@ from .execute import apply as ap
 from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .knowledge import adr
+from .knowledge import pattern_registry
 from .models.registry import Registry
 from .models.router import Router
 from .planning import blast_radius
@@ -170,6 +171,9 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     rules = safety_rules.load_rules(task_root)
     adrs = adr.load_adrs(task_root)
     constraints = adr.constraints_context(adrs)
+    patterns_ctx = pattern_registry.patterns_context(pattern_registry.load_patterns(task_root), task)
+    if patterns_ctx:
+        constraints = (constraints + "\n\nHOUSE PATTERNS (follow):\n" + patterns_ctx).strip()
     if adr.active(adrs):
         console.print(f"[dim]{len(adr.active(adrs))} active ADR(s) in effect[/dim]")
     registry = Registry(config)

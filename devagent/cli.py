@@ -367,6 +367,49 @@ def adr_check(path: str = typer.Option(".", "--path", "-p")):
     raise typer.Exit(1)
 
 
+pattern_app = typer.Typer(no_args_is_help=True, help="Learned code patterns (with decay).")
+app.add_typer(pattern_app, name="pattern")
+
+
+@pattern_app.command("list")
+def pattern_list(path: str = typer.Option(".", "--path", "-p")):
+    """List patterns with effective (decayed) confidence."""
+    from .knowledge import pattern_registry as pr
+    patterns = pr.load_patterns(Path(path).resolve())
+    if not patterns:
+        console.print("[dim]no patterns — run `devagent pattern add`[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    for c in ("id", "status", "conf", "eff", "uses", "name"):
+        table.add_column(c)
+    for p in patterns:
+        table.add_row(p.id, p.status, f"{p.confidence:.2f}",
+                      f"{pr.effective_confidence(p):.2f}", str(p.uses), p.name[:40])
+    console.print(table)
+
+
+@pattern_app.command("add")
+def pattern_add(
+    name: str = typer.Argument(..., help="Short pattern name."),
+    description: str = typer.Option("", "--desc", "-d"),
+    tag: list[str] = typer.Option(None, "--tag", "-t", help="Tag (repeatable)."),
+    snippet: str = typer.Option("", "--snippet", "-s"),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Capture a pattern (explicit — frontier fixes are not auto-promoted)."""
+    from .knowledge import pattern_registry as pr
+    p = pr.add_pattern(Path(path).resolve(), name, description, list(tag or []), snippet)
+    console.print(f"added pattern [bold]{p.id}[/bold]")
+
+
+@pattern_app.command("deprecate")
+def pattern_deprecate(pattern_id: str = typer.Argument(...), path: str = typer.Option(".", "--path", "-p")):
+    """Deprecate a pattern so it no longer influences generation."""
+    from .knowledge import pattern_registry as pr
+    ok = pr.deprecate(Path(path).resolve(), pattern_id)
+    console.print(f"deprecated {pattern_id}" if ok else f"[yellow]no pattern '{pattern_id}'[/yellow]")
+
+
 @app.command()
 def calibrate(
     path: str = typer.Option(".", "--path", "-p"),
