@@ -40,10 +40,12 @@ from .planning import blast_radius
 from .prove.audit import differential_audit, persist as persist_audit
 from .review import reviewer as reviewer_mod
 from .ui import activity
+from .validate import failure_kind
 from .validate import impact
+from .validate import interface as interface_mod
 from .validate import migration_gate
 from .validate import safety_rules
-from .validate.gate import run_gate
+from .validate.gate import GateReport, run_gate
 
 
 @dataclass
@@ -100,6 +102,41 @@ def _save_session(root: Path, result: RunResult, task: str) -> None:
     (d / f"{result.session_id}.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _fail_text(gate: GateReport, integration: list[str]) -> str:
+    """The text a recovery step reasons over: the failing checks' detail + interface drift."""
+    parts = [c.detail for c in gate.failures if c.detail]
+    if integration:
+        parts.append("INTERFACE:\n" + "\n".join(integration))
+    return "\n".join(parts)
+
+
+def _missing_def_files(index, names: set[str]) -> set[str]:
+    """Files that define any of the unresolved names — force-included in the wider retrieval so
+    the local model finally SEES the interface it was guessing at."""
+    if not names:
+        return set()
+    want = set(names)
+    hits: set[str] = set()
+    for f in index.files:
+        syms = {s.name.split(".")[-1] for s in getattr(f, "symbols", [])}
+        if want & syms:
+            hits.add(f.rel)
+    return hits
+
+
+def _retrieve_wider(index, subtask, env, files, embedder, extra_paths):
+    """A deliberately bigger slice for a context-miss retry: double the token budget, a few more
+    files, and the files that define the unresolved names pinned to the front."""
+    return retrieve(
+        index, subtask.description,
+        max_context_tokens=int(env.get("max_context_tokens", 12000)) * 2,
+        max_file_lines=int(env.get("max_file_lines", 400)),
+        max_files=int(env.get("max_subtask_files", 3)) + 4,
+        explicit_paths=set(subtask.target_files) | (files or set()) | extra_paths,
+        embedder=embedder,
+    )
+
+
 def _run_subtask(
     subtask: Subtask, task_root: Path, config: Config, router: Router,
     index, console: Console, result: RunResult, dry_run: bool,
@@ -109,13 +146,14 @@ def _run_subtask(
     use_spinner: bool = True,
 ) -> SubtaskOutcome:
     env = config.envelope
+    embedder = get_embedder(config)  # semantic tier (gap #4) — no-op unless configured
     bundle = retrieve(
         index, subtask.description,
         max_context_tokens=int(env.get("max_context_tokens", 12000)),
         max_file_lines=int(env.get("max_file_lines", 400)),
         max_files=int(env.get("max_subtask_files", 3)) + 1,
         explicit_paths=set(subtask.target_files) | (files or set()),
-        embedder=get_embedder(config),  # semantic tier (gap #4) — no-op unless configured
+        embedder=embedder,
     )
     if not bundle.in_envelope:
         result.in_envelope = False
@@ -154,14 +192,51 @@ def _run_subtask(
             subtask.id, subtask.description, [c.path for c in prepared.changes], {}, False, "dry_run")
 
     snap = _snap_dir(task_root, result.session_id, subtask.id)
-    ap.snapshot(task_root, snap, prepared.changes)
-    ap.write_changes(task_root, prepared.changes)
-    changed = [c.path for c in prepared.changes]
-    final_changes = prepared.changes
 
-    with activity(console, f"{subtask.id} · verifying (gate)", enabled=use_spinner):
-        gate = run_gate(task_root, changed, config.gate)
+    def _write_and_verify(changes):
+        """Write `changes` (caller must undo first if re-writing), then run the per-file gate AND
+        the cross-file integration check (#6). Returns (gate, integration_issues, changed_paths)."""
+        ap.snapshot(task_root, snap, changes)
+        ap.write_changes(task_root, changes)
+        paths = [c.path for c in changes]
+        with activity(console, f"{subtask.id} · verifying (gate)", enabled=use_spinner):
+            g = run_gate(task_root, paths, config.gate)
+        # Integration check only matters once a file is individually valid.
+        integ = interface_mod.issues_touching(task_root, paths) if g.passed else []
+        return g, integ, paths
+
+    gate, integration, changed = _write_and_verify(prepared.changes)
+    final_changes = prepared.changes
     escalated = False
+
+    # Recovery #7 — a context-shaped failure (undefined name / unresolved import / interface
+    # drift) is a RETRIEVAL miss, not a model limit. Re-retrieve a wider slice (incl. the files
+    # that define the missing names) and retry LOCALLY ($0) before any frontier escalation.
+    if (not gate.passed or integration) and failure_kind.is_context_failure(
+            _fail_text(gate, integration)):
+        names = failure_kind.missing_names(_fail_text(gate, integration))
+        console.print(f"  [yellow]context-type failure[/yellow] on {subtask.id} → re-retrieving "
+                      f"wider and retrying locally" + (f" (missing: {', '.join(sorted(names))})"
+                                                       if names else ""))
+        wider = _retrieve_wider(index, subtask, env, files, embedder,
+                                _missing_def_files(index, names))
+        hint = ("Earlier these names were unresolved — use the EXACT definitions now shown in the "
+                "context: " + ", ".join(sorted(names))) if names else ""
+        ap.undo_from_snapshot(task_root, snap)
+        with activity(console, f"{subtask.id} · re-generating with wider context",
+                      enabled=use_spinner):
+            out_w = execute_subtask(subtask, wider, router, extra_guidance=hint,
+                                    constraints=constraints)
+        result.calls.append(Call(out_w.model or "?", out_w.tier or "local",
+                                 out_w.tokens_in, out_w.tokens_out, out_w.cost_usd))
+        prep_w = ap.prepare(task_root, out_w.edits)
+        if prep_w.changes:
+            gate, integration, changed = _write_and_verify(prep_w.changes)
+            final_changes = prep_w.changes
+        else:
+            ap.undo_from_snapshot(task_root, snap)  # nothing applied — restore originals
+
+    # Frontier escalation — only if local recovery didn't clear the per-file gate.
     if not gate.passed:
         console.print(f"  [yellow]gate failed[/yellow] on {subtask.id} → escalating")
         with activity(console, f"{subtask.id} · asking the frontier model for a fix",
@@ -170,25 +245,29 @@ def _run_subtask(
                 subtask, bundle, out.raw, gate.render(), router)
         result.calls.append(Call(model or "?", tier or "cli", tin, tout, cost))
         escalated = True
-        # roll back the failed attempt, then re-execute with guidance
-        ap.undo_from_snapshot(task_root, snap)
+        ap.undo_from_snapshot(task_root, snap)  # roll back, then re-execute with guidance
         with activity(console, f"{subtask.id} · re-generating edits", enabled=use_spinner):
             out2 = execute_subtask(subtask, bundle, router, extra_guidance=guidance,
                                    constraints=constraints)
         result.calls.append(Call(out2.model or "?", out2.tier or "local", out2.tokens_in, out2.tokens_out, out2.cost_usd))
         prepared2 = ap.prepare(task_root, out2.edits)
         if prepared2.changes:
-            ap.snapshot(task_root, snap, prepared2.changes)
-            ap.write_changes(task_root, prepared2.changes)
-            changed = [c.path for c in prepared2.changes]
+            gate, integration, changed = _write_and_verify(prepared2.changes)
             final_changes = prepared2.changes
-            with activity(console, f"{subtask.id} · re-verifying (gate)", enabled=use_spinner):
-                gate = run_gate(task_root, changed, config.gate)
 
     if not gate.passed:
         console.print(f"  [red]gate still failing[/red] on {subtask.id}:\n{gate.render()}")
         return SubtaskOutcome(subtask.id, subtask.description, changed, gate.to_dict(),
                               escalated, "gate_failed")
+
+    # #6 — keep the tree GREEN. If cross-file interfaces still don't resolve after recovery, the
+    # subtask integrated badly: roll it back rather than leave a half-built, non-importable tree.
+    if integration:
+        console.print(f"  [red]integration check failed[/red] on {subtask.id} (rolled back):\n  "
+                      + "\n  ".join(integration[:5]))
+        ap.undo_from_snapshot(task_root, snap)
+        return SubtaskOutcome(subtask.id, subtask.description, changed, gate.to_dict(),
+                              escalated, "integration_failed")
 
     # Reviewer agent (V3) — an extra gate: a HIGH-severity finding rolls the subtask back.
     if review:

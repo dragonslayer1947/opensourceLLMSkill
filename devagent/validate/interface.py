@@ -37,8 +37,9 @@ def _dotted(rel: str) -> str:
     return (rel[:-3] if rel.endswith(".py") else rel).replace("/", ".")
 
 
-def check_imports(root: Path) -> list[str]:
-    """Return human-readable issues for intra-repo imports of names that don't exist."""
+def _scan(root: Path) -> list[tuple[str, str, str]]:
+    """Return (importer_rel, imported_name, source_module) for every intra-repo `from x import y`
+    where the source module doesn't define `y` — the structured form of the drift."""
     root = Path(root)
     files: dict[str, tuple[str, ast.Module, set[str]]] = {}
     for p, rel in source_paths(root):
@@ -50,7 +51,7 @@ def check_imports(root: Path) -> list[str]:
             continue
         files[_dotted(rel)] = (rel, tree, top_level_names(tree))
 
-    issues: list[str] = []
+    out: list[tuple[str, str, str]] = []
     for _dot, (rel, tree, _names) in files.items():
         for node in ast.walk(tree):
             if not isinstance(node, ast.ImportFrom) or node.level:
@@ -60,12 +61,28 @@ def check_imports(root: Path) -> list[str]:
                 continue  # not an intra-repo module file (package / stdlib / third-party)
             target_names = files[mod][2]
             for a in node.names:
-                if a.name == "*":
-                    continue
-                if a.name in target_names:
+                if a.name == "*" or a.name in target_names:
                     continue
                 if f"{mod}.{a.name}" in files:
                     continue  # `from pkg import submodule` — a real sibling module
-                issues.append(
-                    f"{rel}: imports '{a.name}' from '{mod}', which does not define it")
-    return issues
+                out.append((rel, a.name, mod))
+    return out
+
+
+def _fmt(rel: str, name: str, mod: str) -> str:
+    return f"{rel}: imports '{name}' from '{mod}', which does not define it"
+
+
+def check_imports(root: Path) -> list[str]:
+    """Return human-readable issues for intra-repo imports of names that don't exist."""
+    return [_fmt(rel, name, mod) for rel, name, mod in _scan(root)]
+
+
+def issues_touching(root: Path, changed: list[str]) -> list[str]:
+    """Like check_imports, but only the issues that involve a CHANGED file — either the file
+    doing the bad import, or the module whose contents changed out from under an importer. Used
+    as the per-subtask integration gate (#6), so pre-existing unrelated drift never fails a run."""
+    changed_rels = {c.replace("\\", "/") for c in changed}
+    changed_mods = {_dotted(c.replace("\\", "/")) for c in changed}
+    return [_fmt(rel, name, mod) for rel, name, mod in _scan(root)
+            if rel in changed_rels or mod in changed_mods]
