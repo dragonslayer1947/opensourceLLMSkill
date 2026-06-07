@@ -403,6 +403,23 @@ def status(path: str = typer.Option(".", "--path", "-p")):
 
 
 @app.command()
+def compliance():
+    """List available compliance profiles and which are active in config."""
+    from .knowledge import compliance as comp
+    cfg = load_config()
+    active = cfg.raw.get("compliance", {}).get("profiles", [])
+    table = Table(title="compliance profiles", show_header=True, header_style="bold")
+    table.add_column("profile")
+    table.add_column("rules", justify="right")
+    table.add_column("active")
+    for name in comp.available():
+        on = "[green]yes[/green]" if name in [p.lower() for p in active] else "—"
+        table.add_row(name, str(len(comp.PROFILES[name])), on)
+    console.print(table)
+    console.print("[dim]Enable in config: [compliance] profiles = [\"pci-dss\"][/dim]")
+
+
+@app.command()
 def init():
     """Create ~/.devagent/config.toml if missing and print its path."""
     path = ensure_config()

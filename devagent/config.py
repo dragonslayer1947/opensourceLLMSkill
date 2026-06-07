@@ -97,6 +97,9 @@ run_security = true                    # bandit
 run_tests    = false                   # pytest (off by default; can be slow)
 test_command = "pytest -q"
 
+[compliance]
+profiles = []                          # e.g. ["pci-dss", "soc2", "hipaa"] — merged into safety rules
+
 [reporting]
 counterfactual_model = "claude-cli"    # frontier model the savings/audit are measured against
 audit_sample_rate    = 0.1             # fraction of tasks the quality audit samples

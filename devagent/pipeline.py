@@ -26,6 +26,7 @@ from .execute import specialized
 from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .knowledge import adr
+from .knowledge import compliance
 from .knowledge import pattern_registry
 from .knowledge import service_graph, service_registry
 from .models.registry import Registry
@@ -203,6 +204,10 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     file_set = set(files or [])
     flags = flags or set()
     rules = safety_rules.load_rules(task_root)
+    profiles = config.raw.get("compliance", {}).get("profiles", [])
+    if profiles:
+        rules += compliance.expand(profiles)
+        console.print(f"[dim]compliance profiles: {', '.join(profiles)}[/dim]")
     adrs = adr.load_adrs(task_root)
     constraints = adr.constraints_context(adrs)
     patterns_ctx = pattern_registry.patterns_context(pattern_registry.load_patterns(task_root), task)
