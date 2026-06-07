@@ -85,8 +85,10 @@ max_file_lines     = 400               # window files larger than this (skeleton
 max_subtask_files  = 3                 # a subtask touching more files must be decomposed
 
 [limits]
-blast_radius_warn  = 10                # warn when a change affects more than this many files
-blast_radius_block = 40                # confirm before proceeding above this (unless --yes)
+blast_radius_warn    = 10              # warn when a change affects more than this many files
+blast_radius_block   = 40              # confirm before proceeding above this (unless --yes)
+token_budget_session = 0               # 0 = unlimited; else stop the session past this many tokens
+cost_budget_usd      = 0               # 0 = unlimited; else stop when counterfactual cost exceeds
 
 [gate]
 run_types    = true                    # mypy

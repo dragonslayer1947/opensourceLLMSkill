@@ -285,8 +285,14 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
             result.status = "locked"
             return result
 
+    local_ref = config.reporting.get("local_counterfactual_price", "sonnet")
     try:
         for st in plan.subtasks:
+            reason = report.over_budget(result.calls, config.limits, config.pricing, local_ref)
+            if reason:
+                console.print(f"[red]session budget reached[/red]: {reason} — "
+                              f"stopping ({len(plan.subtasks) - len(result.outcomes)} subtask(s) skipped)")
+                break
             console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
             outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
                                    file_set, rules, flags, constraints)

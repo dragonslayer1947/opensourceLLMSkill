@@ -24,6 +24,22 @@ def counterfactual_cost(pricing: dict[str, Pricing], frontier_model: str, tin: i
     return cost_of(pricing, frontier_model, tin, tout)
 
 
+def over_budget(calls, limits: dict, pricing: dict[str, Pricing],
+                local_ref: str = "sonnet") -> str | None:
+    """Return a reason string if the session has hit its token or cost budget, else None.
+    A budget of 0 (or missing) means unlimited."""
+    token_budget = int(limits.get("token_budget_session", 0) or 0)
+    cost_budget = float(limits.get("cost_budget_usd", 0) or 0)
+    tokens = sum(c.tin + c.tout for c in calls)
+    if token_budget and tokens >= token_budget:
+        return f"{tokens} tokens ≥ budget {token_budget}"
+    if cost_budget:
+        _, counterfactual = billing(calls, pricing, local_ref)
+        if counterfactual >= cost_budget:
+            return f"${counterfactual:.4f} ≥ budget ${cost_budget:.2f}"
+    return None
+
+
 def billing(calls, pricing: dict[str, Pricing], local_ref: str = "sonnet") -> tuple[float, float]:
     """Return (actual_cost, counterfactual_cost) over a sequence of model calls.
 
