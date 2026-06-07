@@ -16,7 +16,7 @@ from rich.console import Console
 
 from . import ledger, report
 from .config import Config, load_config
-from .context.index import build_index
+from .context.cache import build_index_cached
 from .context.retrieve import retrieve
 from .decompose.planner import Plan, Subtask, decompose
 from .execute import apply as ap
@@ -188,7 +188,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     result = RunResult(session_id=session_id, plan=Plan([], False, None))
 
     console.print(f"[bold]Indexing[/bold] {task_root} …")
-    index = build_index(task_root)
+    index = build_index_cached(task_root)
     console.print(f"  {len(index.files)} files indexed")
 
     bundle = retrieve(
@@ -371,7 +371,7 @@ def resume_session(session_id: str, path: str, *, assume_yes: bool, console: Con
                   f"subtasks remain")
     registry = Registry(config)
     router = Router(registry)
-    index = build_index(task_root)
+    index = build_index_cached(task_root)
     rules = safety_rules.load_rules(task_root)
     constraints = adr.constraints_context(adr.load_adrs(task_root))
     result = RunResult(session_id=session_id, plan=Plan(subtasks, True, None))

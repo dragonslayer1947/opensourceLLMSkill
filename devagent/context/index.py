@@ -28,6 +28,20 @@ def _content_terms(text: str) -> set[str]:
 SKIP_DIRS = {".git", ".devagent", "__pycache__", ".venv", "venv", "node_modules",
              ".mypy_cache", ".ruff_cache", ".pytest_cache", "dist", "build", ".idea"}
 
+SOURCE_SUFFIXES = {".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb", ".rs"}
+
+
+def source_paths(root: Path):
+    """Yield (path, rel) for every indexable source file (shared by the index and its cache)."""
+    root = Path(root).resolve()
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        if any(part in SKIP_DIRS for part in path.parts):
+            continue
+        if path.suffix in SOURCE_SUFFIXES:
+            yield path, path.relative_to(root).as_posix()
+
 
 @dataclass
 class Symbol:
@@ -103,24 +117,15 @@ def _parse_python(path: Path, rel: str, text: str) -> FileEntry:
 def build_index(root: str | Path) -> RepoIndex:
     root = Path(root).resolve()
     index = RepoIndex(root=root)
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
+    for path, rel in source_paths(root):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
             continue
-        if any(part in SKIP_DIRS for part in path.parts):
-            continue
-        rel = path.relative_to(root).as_posix()
         if path.suffix == ".py":
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
             index.files.append(_parse_python(path, rel, text))
-        elif path.suffix in {".js", ".ts", ".tsx", ".jsx", ".go", ".java", ".rb", ".rs"}:
+        else:
             # Non-Python: no ast symbols, but content terms still enable retrieval.
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
             index.files.append(FileEntry(
                 path=path, rel=rel, lines=text.count("\n") + 1, terms=_content_terms(text)))
     return index

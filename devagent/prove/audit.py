@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ..config import Config
 from ..context.compress import compress_for_frontier
-from ..context.index import build_index
+from ..context.cache import build_index_cached
 from ..context.retrieve import retrieve
 from ..decompose.planner import Subtask
 from ..execute.executor import build_executor_prompt, execute_subtask
@@ -72,7 +72,7 @@ def differential_audit(
     local_model: str | None = None,
 ) -> AuditResult:
     root = Path(repo).resolve()
-    index = build_index(root)
+    index = build_index_cached(root)
     bundle = retrieve(
         index, task,
         max_context_tokens=int(config.envelope.get("max_context_tokens", 12000)),
