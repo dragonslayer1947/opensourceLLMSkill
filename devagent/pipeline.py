@@ -194,7 +194,8 @@ def _run_subtask(
 def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Console,
         files: list[str] | None = None, role_overrides: dict[str, str] | None = None,
         audit: bool = False, flags: set[str] | None = None,
-        contract: bool = True, review: bool = False, test: bool = False) -> RunResult:
+        contract: bool = True, review: bool = False, test: bool = False,
+        parallel: bool = False) -> RunResult:
     config = load_config()
     for role, model in (role_overrides or {}).items():
         config.roles[role] = [model] + [m for m in config.roles.get(role, []) if m != model]
@@ -314,18 +315,43 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
             return result
 
     local_ref = config.reporting.get("local_counterfactual_price", "sonnet")
+
+    def _budget_hit() -> bool:
+        reason = report.over_budget(result.calls, config.limits, config.pricing, local_ref)
+        if reason:
+            console.print(f"[red]session budget reached[/red]: {reason} — stopping")
+        return bool(reason)
+
+    def _run_one(st: Subtask) -> SubtaskOutcome:
+        console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
+        return _run_subtask(st, task_root, config, router, index, console, result, dry_run,
+                            file_set, rules, flags, constraints, review)
+
     try:
-        for st in plan.subtasks:
-            reason = report.over_budget(result.calls, config.limits, config.pricing, local_ref)
-            if reason:
-                console.print(f"[red]session budget reached[/red]: {reason} — "
-                              f"stopping ({len(plan.subtasks) - len(result.outcomes)} subtask(s) skipped)")
-                break
-            console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
-            outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
-                                   file_set, rules, flags, constraints, review)
-            result.outcomes.append(outcome)
-            _save_session(task_root, result, task)
+        if parallel and len(plan.subtasks) > 1 and not dry_run:
+            from concurrent.futures import ThreadPoolExecutor
+
+            from .planning.scheduler import schedule
+            waves = schedule(plan.subtasks)
+            console.print(f"[bold]Parallel[/bold]: {len(plan.subtasks)} subtasks → {len(waves)} wave(s)")
+            for wi, wave in enumerate(waves, 1):
+                if _budget_hit():
+                    break
+                console.print(f"\n[bold]wave {wi}/{len(waves)}[/bold]: {', '.join(s.id for s in wave)}")
+                if len(wave) == 1:
+                    result.outcomes.append(_run_one(wave[0]))
+                else:
+                    with ThreadPoolExecutor(max_workers=len(wave)) as ex:
+                        for outcome in ex.map(_run_one, wave):
+                            result.outcomes.append(outcome)
+                _save_session(task_root, result, task)
+            _consistency_check(result, console)
+        else:
+            for st in plan.subtasks:
+                if _budget_hit():
+                    break
+                result.outcomes.append(_run_one(st))
+                _save_session(task_root, result, task)
 
         # keep / rollback
         applied = [o for o in result.outcomes if o.status == "applied"]
@@ -391,6 +417,22 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
             console.print(f"  [yellow]audit failed[/yellow]: {e}")
 
     return result
+
+
+def _consistency_check(result: RunResult, console: Console) -> None:
+    """After parallel execution, verify no file was written by two subtasks (the file-claim
+    invariant). The scheduler guarantees this; the check catches any regression (gap #9)."""
+    seen: dict[str, list[str]] = {}
+    for o in result.outcomes:
+        if o.status != "applied":
+            continue
+        for f in o.changed_files:
+            seen.setdefault(f, []).append(o.subtask_id)
+    conflicts = {f: ids for f, ids in seen.items() if len(ids) > 1}
+    if conflicts:
+        console.print("[red]consistency: file written by multiple subtasks:[/red]")
+        for f, ids in conflicts.items():
+            console.print(f"  {f}: {', '.join(ids)}")
 
 
 def resume_session(session_id: str, path: str, *, assume_yes: bool, console: Console) -> RunResult | None:
