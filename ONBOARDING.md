@@ -50,7 +50,8 @@ Everything is snapshotted; sessions checkpoint per subtask so a crash can `devag
 
 ```
 devagent/
-├── cli.py            # Typer CLI (all commands)
+├── cli.py            # Typer CLI (all commands); bare `devagent` → repl.run_repl
+├── repl.py           # interactive shell (resident session, slash commands, /ask, passthrough)
 ├── pipeline.py       # the conductor — wires the whole run flow
 ├── config.py         # ~/.devagent/config.toml (models, roles, envelope, limits, pricing)
 ├── models/           # base, openai_compat, anthropic_client, cli_client, registry, router
@@ -87,6 +88,11 @@ sync.json), `reservations/`, `proposals/`, `traces/`, `integrations/outbox.jsonl
   (API billing avoided). `devagent cost` / `devagent quality` report the measured numbers.
 
 ## Commands
+
+**Interactive shell:** bare `devagent` (no subcommand) opens a resident REPL (`repl.py`) — plain
+text = a task, `/ask` = read-only Q&A, session-only slash commands (`/repo` `/dry` `/auto`
+`/review` `/test` `/parallel` `/clear` `/help` `/exit`), and any other `/command` passes through
+to the Typer app below. Uses `prompt_toolkit` when on a TTY, falls back to `input()` otherwise.
 
 `run` (flags: `--file --executor --planner --dry-run --yes --audit --flag --contract --review
 --test --parallel`), `cost`, `quality`, `audit`, `calibrate`, `log`, `undo`, `resume`, `status`,

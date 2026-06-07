@@ -40,6 +40,33 @@ python -m pip install -e ".[validate]"   # mypy, ruff, bandit, pytest
 - **Frontier model**: the `claude` CLI installed and logged in (`claude auth status`). No API
   key needed. (Or set `ANTHROPIC_API_KEY` to use metered API instead — see config.)
 
+## Interactive shell
+
+Run `devagent` with no command to drop into a resident session — like the `claude` or `codex`
+CLIs — instead of spawning a new process per action:
+
+```text
+$ devagent
+devagent 0.1.0 — interactive shell
+repo: C:\Users\ADMIN\devagent
+type a task to run it · /ask <q> to ask · /help · /exit
+
+devagent (devagent)> add a /health endpoint that returns build info
+…                                    # runs the full pipeline, with confirmations
+[dry] devagent (devagent)> /ask what does the router do?
+The router (devagent/models/router.py) resolves a role to a model chain …
+devagent (devagent)> /epic plan "migrate billing to the outbox pattern"
+```
+
+- **plain text** → a coding task (decompose → execute → gate → apply), confirmations included
+- **`/ask <question>`** → read-only Q&A about the repo via the local model (never edits)
+- **`/repo <path>`**, **`/dry` `/auto` `/review` `/test` `/parallel`** (toggle run flags),
+  **`/clear`**, **`/help`**, **`/exit`** (or Ctrl-D); Ctrl-C aborts the current task
+- **any other `/command`** passes straight through to the CLI below (`/cost`, `/trace`,
+  `/epic …`, `/undo`, …)
+
+The one-shot commands below all still work unchanged from a normal shell.
+
 ## Commands
 
 ```powershell

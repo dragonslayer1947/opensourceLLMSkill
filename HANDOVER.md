@@ -7,9 +7,10 @@ tasks or fixes a gate failure. Everything is verified by a deterministic gate; s
 quality are measured.
 
 - **Repo:** local git at `C:\Users\ADMIN\devagent`, branch `main`. **No remote yet.**
-- **Size:** 62 package modules · 36 test files · **201 offline tests** (ruff-clean,
+- **Size:** 63 package modules · 36 test files · **219 offline tests** (ruff-clean,
   CI matrix ubuntu/windows × py3.11/3.12).
-- **Status:** **V1, V1.5, V2, V3, V4, V5 COMPLETE.**
+- **Status:** **V1, V1.5, V2, V3, V4, V5 COMPLETE.** Plus an **interactive shell** (`devagent`
+  with no subcommand opens a resident REPL — like the `claude`/`codex` CLIs).
 - Verified end-to-end on the claude subscription, including a **self-improvement run** on this
   repo (the reviewer caught a real issue; tests passed; change committed).
 - Shareable onboarding: https://claude.ai/claude-code/onboard/OugmukGx4Q8V
@@ -30,6 +31,14 @@ quality are measured.
 ---
 
 ## What's done (by area)
+
+**Interactive shell (`repl.py`)**
+- Bare `devagent` opens a resident session (build-once config/router, working repo, run-flags,
+  history) instead of a process per action. Plain text → a task through the full pipeline;
+  `/ask <q>` → read-only repo Q&A via the local model; session slash-commands (`/repo` `/dry`
+  `/auto` `/review` `/test` `/parallel` `/clear` `/help` `/exit`); any other `/command` passes
+  through to the Typer CLI. `prompt_toolkit` (history/editing) with an `input()` fallback;
+  Ctrl-C aborts the current task, Ctrl-D exits. One-shot commands are unchanged.
 
 **Models & orchestration**
 - 3 provider protocols: `openai-compat` (llama.cpp/GPT/…), `anthropic` (API), **`cli`** (spawns

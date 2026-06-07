@@ -26,7 +26,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 app = typer.Typer(
-    no_args_is_help=True,
+    no_args_is_help=False,   # bare `devagent` opens the interactive shell (see _main)
     add_completion=False,
     help="Cost-efficient multi-model coding CLI. Local model works inside its parity "
          "envelope; a frontier model only decomposes hard tasks or fixes gate failures.",
@@ -41,13 +41,18 @@ def _version_callback(value: bool):
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def _main(
+    ctx: typer.Context,
     version: bool = typer.Option(
         None, "--version", "-V", callback=_version_callback, is_eager=True,
         help="Show version and exit."),
 ):
-    """devagent — see `devagent <command> --help` for details."""
+    """devagent — run with no command to open the interactive shell, or see
+    `devagent <command> --help` for one-shot commands."""
+    if ctx.invoked_subcommand is None:
+        from . import repl
+        repl.run_repl(".")
 
 
 @app.command()
