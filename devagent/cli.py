@@ -557,6 +557,74 @@ def compliance():
     console.print("[dim]Enable in config: [compliance] profiles = [\"pci-dss\"][/dim]")
 
 
+@app.command()
+def enforce(
+    action: str = typer.Argument("status", help="on | off | status"),
+    path: str = typer.Option(".", "--path", "-p"),
+):
+    """Turn local-execution enforcement on/off for THIS repo (needs the hook — see install-hook).
+
+    'on' writes .devagent/ENFORCE; the PreToolUse hook then blocks direct source edits in this repo
+    and forces work through `devagent`, so the local model does the implementation. 'off' removes it."""
+    root = Path(path).resolve()
+    sentinel = root / ".devagent" / "ENFORCE"
+    action = action.lower()
+    if action == "on":
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text(
+            "devagent local-execution enforcement is ON for this repo.\n"
+            "The PreToolUse hook blocks direct source edits; route work through `devagent run`.\n"
+            "Delete this file (or run `devagent enforce off`) to disable.\n", encoding="utf-8")
+        console.print(f"[green]enforcement ON[/green] for {root}")
+        console.print("[dim]ensure the hook is installed once: devagent install-hook[/dim]")
+    elif action == "off":
+        if sentinel.exists():
+            sentinel.unlink()
+        console.print(f"[yellow]enforcement OFF[/yellow] for {root}")
+    else:
+        on = sentinel.exists()
+        console.print(f"enforcement: {'[green]ON[/green]' if on else 'OFF'} for {root}")
+
+
+@app.command(name="install-hook")
+def install_hook(uninstall: bool = typer.Option(False, "--uninstall", help="Remove the hook.")):
+    """Register (or --uninstall) the PreToolUse enforcement hook in ~/.claude/settings.json.
+
+    One-time setup. Merges into existing hooks without disturbing them; idempotent."""
+    settings = Path.home() / ".claude" / "settings.json"
+    data: dict = {}
+    if settings.exists():
+        try:
+            data = json.loads(settings.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            console.print(f"[red]settings.json is not valid JSON:[/red] {e}")
+            raise typer.Exit(1)
+    pre = data.setdefault("hooks", {}).setdefault("PreToolUse", [])
+    marker = "devagent.hooks.enforce_local"
+
+    def is_ours(entry: dict) -> bool:
+        return any(marker in h.get("command", "") for h in entry.get("hooks", []))
+
+    if uninstall:
+        kept = [e for e in pre if not is_ours(e)]
+        data["hooks"]["PreToolUse"] = kept
+        settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        console.print("[yellow]removed[/yellow] enforcement hook" if len(kept) < len(pre)
+                      else "[dim]no enforcement hook to remove[/dim]")
+        return
+    if any(is_ours(e) for e in pre):
+        console.print("[dim]enforcement hook already installed[/dim]")
+        return
+    cmd = f'"{sys.executable}" -m devagent.hooks.enforce_local'
+    pre.append({"matcher": "Edit|Write|MultiEdit",
+                "hooks": [{"type": "command", "command": cmd, "timeout": 10}]})
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    console.print(f"[green]installed[/green] enforcement hook → {settings}")
+    console.print("[dim]turn it on per-repo with `devagent enforce on`; "
+                  "restart Claude Code to load the hook.[/dim]")
+
+
 @app.command(name="install-skill")
 def install_skill():
     """Install the bundled decompose-execute skill into ~/.claude/skills (single source of truth).
