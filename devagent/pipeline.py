@@ -21,6 +21,7 @@ from .context.retrieve import retrieve
 from .decompose.planner import Plan, Subtask, decompose
 from .execute import apply as ap
 from .execute import contract as contract_mod
+from .execute import lock as lock_mod
 from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
 from .knowledge import adr
@@ -273,28 +274,42 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
                 console.print("[yellow]aborted before execution[/yellow]")
                 return result
 
-    for st in plan.subtasks:
-        console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
-        outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
-                               file_set, rules, flags, constraints)
-        result.outcomes.append(outcome)
-        _save_session(task_root, result, task)
+    # Write locks — claim the files this run will touch (released in finally).
+    acquired: list[str] = []
+    if not dry_run and planned:
+        acquired, conflicts = lock_mod.acquire(task_root, planned, session_id)
+        if conflicts:
+            for p, holder in conflicts:
+                console.print(f"[red]locked[/red]: {p} held by session "
+                              f"{holder.get('session_id', '?')} (pid {holder.get('pid', '?')})")
+            result.status = "locked"
+            return result
 
-    # keep / rollback
-    applied = [o for o in result.outcomes if o.status == "applied"]
-    if dry_run:
-        result.status = "dry_run"
-    elif applied and not assume_yes:
-        from rich.prompt import Confirm
-        if not Confirm.ask(f"\nKeep {len(applied)} verified change-set(s)?", default=True):
-            for o in result.outcomes:
-                ap.undo_from_snapshot(task_root, _snap_dir(task_root, session_id, o.subtask_id))
-            result.status = "rolled_back"
-            console.print("[yellow]rolled back[/yellow]")
+    try:
+        for st in plan.subtasks:
+            console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
+            outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
+                                   file_set, rules, flags, constraints)
+            result.outcomes.append(outcome)
+            _save_session(task_root, result, task)
+
+        # keep / rollback
+        applied = [o for o in result.outcomes if o.status == "applied"]
+        if dry_run:
+            result.status = "dry_run"
+        elif applied and not assume_yes:
+            from rich.prompt import Confirm
+            if not Confirm.ask(f"\nKeep {len(applied)} verified change-set(s)?", default=True):
+                for o in result.outcomes:
+                    ap.undo_from_snapshot(task_root, _snap_dir(task_root, session_id, o.subtask_id))
+                result.status = "rolled_back"
+                console.print("[yellow]rolled back[/yellow]")
+            else:
+                result.status = "applied"
         else:
-            result.status = "applied"
-    else:
-        result.status = "applied" if applied else "gate_failed"
+            result.status = "applied" if applied else "gate_failed"
+    finally:
+        lock_mod.release(task_root, acquired, session_id)
 
     # Contract conformance — diff the implementation back against the spec (gap #6).
     if contract_doc is not None and result.status == "applied":
