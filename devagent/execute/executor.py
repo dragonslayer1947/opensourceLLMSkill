@@ -42,14 +42,17 @@ class ExecOutput:
     notes: list[str] = field(default_factory=list)
 
 
-def build_executor_prompt(subtask: Subtask, bundle: ContextBundle, extra_guidance: str = "") -> tuple[str, str]:
+def build_executor_prompt(subtask: Subtask, bundle: ContextBundle, extra_guidance: str = "",
+                          constraints: str = "") -> tuple[str, str]:
     """The (system, user) pair for a generation. Shared by the executor and the audit so the
     local and frontier models are compared on an identical prompt."""
     context = bundle.render() or "(no file context retrieved — create new files as needed)"
     guidance = f"\nADDITIONAL GUIDANCE (follow precisely):\n{extra_guidance}\n" if extra_guidance else ""
+    decisions = f"\nPROJECT DECISIONS (must follow):\n{constraints}\n" if constraints else ""
     user = (
         f"TASK:\n{subtask.description}\n\n"
         f"CONTEXT (the only files you may edit; large files are windowed):\n{context}\n"
+        f"{decisions}"
         f"{guidance}\n"
         f"Produce the edit blocks now."
     )
@@ -62,9 +65,10 @@ def execute_subtask(
     router: Router,
     *,
     extra_guidance: str = "",
+    constraints: str = "",
     role: str = "executor",
 ) -> ExecOutput:
-    system, user = build_executor_prompt(subtask, bundle, extra_guidance)
+    system, user = build_executor_prompt(subtask, bundle, extra_guidance, constraints)
     result = router.complete(role, system, user)
     edits = parse_edits(result.text)
     notes = [] if edits else ["no edit blocks parsed from model output"]

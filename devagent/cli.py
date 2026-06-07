@@ -288,6 +288,85 @@ def rules(
     console.print(table)
 
 
+adr_app = typer.Typer(no_args_is_help=True, help="Architecture Decision Records.")
+app.add_typer(adr_app, name="adr")
+
+
+@adr_app.command("list")
+def adr_list(path: str = typer.Option(".", "--path", "-p")):
+    """List ADRs and their status."""
+    from .knowledge import adr as adr_mod
+    adrs = adr_mod.load_adrs(Path(path).resolve())
+    if not adrs:
+        console.print("[dim]no ADRs — run `devagent adr new`[/dim]")
+        return
+    table = Table(show_header=True, header_style="bold")
+    for c in ("id", "status", "title", "constraints"):
+        table.add_column(c)
+    for a in adrs:
+        status = f"[green]{a.status}[/green]" if a.is_active else a.status
+        table.add_row(a.id, status, a.title[:50], str(len(a.constraints)))
+    console.print(table)
+
+
+@adr_app.command("show")
+def adr_show(adr_id: str = typer.Argument(...), path: str = typer.Option(".", "--path", "-p")):
+    """Show one ADR."""
+    from .knowledge import adr as adr_mod
+    adrs = {a.id: a for a in adr_mod.load_adrs(Path(path).resolve())}
+    a = adrs.get(adr_id)
+    if not a:
+        console.print(f"[yellow]no ADR '{adr_id}'[/yellow]")
+        raise typer.Exit(1)
+    console.print(f"[bold]{a.id}[/bold] ({a.status}) — {a.title}")
+    console.print(f"  decision: {a.decision}")
+    console.print(f"  affects: {', '.join(a.affects_services) or '—'}")
+    for c in a.constraints:
+        console.print(f"  constraint ({c.severity}): {c.rule}")
+
+
+@adr_app.command("new")
+def adr_new(path: str = typer.Option(".", "--path", "-p")):
+    """Scaffold a sample ADR."""
+    from .knowledge import adr as adr_mod
+    p = adr_mod.write_sample(Path(path).resolve())
+    console.print(f"sample ADR at [bold]{p}[/bold]")
+
+
+@adr_app.command("check")
+def adr_check(path: str = typer.Option(".", "--path", "-p")):
+    """Check the working-tree git diff against accepted ADRs (semantic, via the local model)."""
+    import subprocess
+    from .knowledge import adr as adr_mod
+    root = Path(path).resolve()
+    adrs = adr_mod.load_adrs(root)
+    if not adr_mod.active(adrs):
+        console.print("[dim]no accepted ADRs to check against[/dim]")
+        return
+    try:
+        diff = subprocess.run(["git", "diff", "HEAD"], cwd=str(root), capture_output=True,
+                              text=True, timeout=30).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        console.print("[yellow]git not available or timed out[/yellow]")
+        raise typer.Exit(1)
+    if not diff.strip():
+        console.print("[dim]no changes to check[/dim]")
+        return
+    cfg = load_config()
+    router = Router(Registry(cfg))
+    try:
+        violations = adr_mod.check_violations(adrs, diff, router)
+    except RoutingError as e:
+        console.print(f"[red]model error:[/red] {e}")
+        raise typer.Exit(1)
+    if not violations:
+        console.print("[green]no ADR violations found[/green]")
+        return
+    for v in violations:
+        console.print(f"[red]✗ {v.get('adr_id')}[/red]: {v.get('reason')}")
+    raise typer.Exit(1)
+
+
 @app.command()
 def calibrate(
     path: str = typer.Option(".", "--path", "-p"),

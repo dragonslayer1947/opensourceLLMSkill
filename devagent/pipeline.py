@@ -22,6 +22,7 @@ from .decompose.planner import Plan, Subtask, decompose
 from .execute import apply as ap
 from .execute.escalate import get_correction
 from .execute.executor import execute_subtask
+from .knowledge import adr
 from .models.registry import Registry
 from .models.router import Router
 from .planning import blast_radius
@@ -89,6 +90,7 @@ def _run_subtask(
     index, console: Console, result: RunResult, dry_run: bool,
     files: set[str] | None = None,
     rules: list | None = None, flags: set[str] | None = None,
+    constraints: str = "",
 ) -> SubtaskOutcome:
     env = config.envelope
     bundle = retrieve(
@@ -101,7 +103,7 @@ def _run_subtask(
     if not bundle.in_envelope:
         result.in_envelope = False
 
-    out = execute_subtask(subtask, bundle, router)
+    out = execute_subtask(subtask, bundle, router, constraints=constraints)
     result.calls.append(Call(out.model or "?", out.tier or "local", out.tokens_in, out.tokens_out, out.cost_usd))
 
     prepared = ap.prepare(task_root, out.edits)
@@ -139,7 +141,7 @@ def _run_subtask(
         escalated = True
         # roll back the failed attempt, then re-execute with guidance
         ap.undo_from_snapshot(task_root, snap)
-        out2 = execute_subtask(subtask, bundle, router, extra_guidance=guidance)
+        out2 = execute_subtask(subtask, bundle, router, extra_guidance=guidance, constraints=constraints)
         result.calls.append(Call(out2.model or "?", out2.tier or "local", out2.tokens_in, out2.tokens_out, out2.cost_usd))
         prepared2 = ap.prepare(task_root, out2.edits)
         if prepared2.changes:
@@ -166,6 +168,10 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     file_set = set(files or [])
     flags = flags or set()
     rules = safety_rules.load_rules(task_root)
+    adrs = adr.load_adrs(task_root)
+    constraints = adr.constraints_context(adrs)
+    if adr.active(adrs):
+        console.print(f"[dim]{len(adr.active(adrs))} active ADR(s) in effect[/dim]")
     registry = Registry(config)
     router = Router(registry)
 
@@ -221,7 +227,7 @@ def run(task: str, path: str, *, dry_run: bool, assume_yes: bool, console: Conso
     for st in plan.subtasks:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
         outcome = _run_subtask(st, task_root, config, router, index, console, result, dry_run,
-                               file_set, rules, flags)
+                               file_set, rules, flags, constraints)
         result.outcomes.append(outcome)
         _save_session(task_root, result, task)
 
@@ -283,12 +289,13 @@ def resume_session(session_id: str, path: str, *, assume_yes: bool, console: Con
     router = Router(registry)
     index = build_index(task_root)
     rules = safety_rules.load_rules(task_root)
+    constraints = adr.constraints_context(adr.load_adrs(task_root))
     result = RunResult(session_id=session_id, plan=Plan(subtasks, True, None))
 
     for st in remaining:
         console.print(f"\n[bold cyan]» {st.id}[/bold cyan] {st.description}")
         outcome = _run_subtask(st, task_root, config, router, index, console, result,
-                               dry_run=False, rules=rules, flags=set())
+                               dry_run=False, rules=rules, flags=set(), constraints=constraints)
         result.outcomes.append(outcome)
         # merge into completed set as we go (durable checkpoint)
         if outcome.status == "applied":
